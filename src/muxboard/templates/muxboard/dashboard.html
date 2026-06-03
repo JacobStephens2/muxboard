@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>muxboard</title>
+  <link rel="stylesheet" href="{{ url_for('muxboard.static', filename='muxboard/muxboard.css') }}">
+</head>
+<body class="muxboard" data-muxboard-base="{{ base }}">
+  <header class="mb-topbar">
+    <h1>muxboard</h1>
+    <div class="mb-topbar-right">
+      {% if snapshot.last_sweep %}
+        <span class="mb-sweep">swept <time data-relative-unix="{{ snapshot.last_sweep | int }}"></time></span>
+      {% else %}
+        <span class="mb-sweep">no sweep yet</span>
+      {% endif %}
+      <button type="button" data-mb-refresh class="mb-btn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+  {% if not snapshot.hosts %}
+    <p class="mb-empty">No hosts with tmux users are configured.</p>
+  {% endif %}
+
+  {% for host in snapshot.hosts %}
+    {% set result = host.result %}
+    <section class="mb-host">
+      <h2>
+        <span class="mb-host-label">{{ host.label }}</span>
+        <code class="mb-host-key">{{ host.key }}</code>
+        {% if result and not result.ok %}
+          <span class="mb-badge mb-badge-err" title="{{ result.error }}">unreachable</span>
+        {% endif %}
+      </h2>
+
+      {% for user in host.users %}
+        {% set sessions = (result.sessions.get(user) if result and result.sessions else []) or [] %}
+        {% set user_err = (result.errors.get(user) if result and result.errors else None) %}
+        <div class="mb-user">
+          <div class="mb-user-head">
+            <code class="mb-user-name">{{ user }}</code>
+            <button type="button" class="mb-btn mb-btn-sm"
+                    data-mb-new-host="{{ host.key }}" data-mb-new-user="{{ user }}">+ new session</button>
+            {% if user_err %}<span class="mb-badge mb-badge-warn">{{ user_err }}</span>{% endif %}
+          </div>
+
+          {% if sessions %}
+          <table class="mb-sessions">
+            <thead>
+              <tr><th>session</th><th>windows</th><th>created</th><th>last activity</th><th>attached</th><th></th></tr>
+            </thead>
+            <tbody>
+            {% for s in sessions %}
+              <tr>
+                <td><code>{{ s.name }}</code></td>
+                <td>{{ s.windows }}</td>
+                <td><time data-relative-unix="{{ s.created }}"></time></td>
+                <td><time data-relative-unix="{{ s.activity }}"></time></td>
+                <td>{{ "yes" if s.attached else "no" }}</td>
+                <td class="mb-actions">
+                  <a class="mb-btn mb-btn-sm" target="_blank" rel="noopener"
+                     href="{{ base }}/{{ host.key | urlencode }}/{{ user | urlencode }}/{{ s.name | urlencode }}/attach">attach</a>
+                  <button type="button" class="mb-btn mb-btn-sm mb-btn-danger"
+                          data-mb-kill-host="{{ host.key }}" data-mb-kill-user="{{ user }}" data-mb-kill-name="{{ s.name }}">kill</button>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% elif not user_err %}
+            <p class="mb-no-sessions">no sessions</p>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </section>
+  {% endfor %}
+  </main>
+
+  <dialog data-mb-kill-dialog class="mb-dialog">
+    <h3>Kill session</h3>
+    <p>Kill <code data-mb-kill-label></code> for <code data-mb-kill-user-label></code> on <code data-mb-kill-host-label></code>?</p>
+    <label>Type the session name to confirm:
+      <input type="text" data-mb-kill-confirm autocomplete="off">
+    </label>
+    <p class="mb-error" data-mb-kill-error hidden></p>
+    <div class="mb-dialog-actions">
+      <button type="button" class="mb-btn" data-mb-kill-cancel>Cancel</button>
+      <button type="button" class="mb-btn mb-btn-danger" data-mb-kill-go>Kill session</button>
+    </div>
+  </dialog>
+
+  <dialog data-mb-new-dialog class="mb-dialog">
+    <h3>New session</h3>
+    <p>On <code data-mb-new-host-label></code> as <code data-mb-new-user-label></code>.</p>
+    <label>Name (1-64 of [A-Za-z0-9_-]):
+      <input type="text" data-mb-new-name autocomplete="off">
+    </label>
+    <label>Command (optional, runs in the first window):
+      <input type="text" data-mb-new-cmd autocomplete="off" placeholder="e.g. htop">
+    </label>
+    <p class="mb-error" data-mb-new-error hidden></p>
+    <div class="mb-dialog-actions">
+      <button type="button" class="mb-btn" data-mb-new-cancel>Cancel</button>
+      <button type="button" class="mb-btn" data-mb-new-go>Create</button>
+    </div>
+  </dialog>
+
+  <script src="{{ url_for('muxboard.static', filename='muxboard/muxboard.js') }}"></script>
+</body>
+</html>

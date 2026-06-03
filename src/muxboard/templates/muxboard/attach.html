@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>muxboard: {{ tmux_user }}@{{ host_label }}:{{ session_name }}</title>
+  <link rel="stylesheet" href="{{ xterm.css }}">
+  <link rel="stylesheet" href="{{ url_for('muxboard.static', filename='muxboard/muxboard.css') }}">
+</head>
+<body class="mb-attach-page">
+  <header class="mb-attach-header">
+    <span>muxboard:</span>
+    <code>{{ tmux_user }}@{{ host_label }}</code>
+    <span>session</span>
+    <code>{{ session_name }}</code>
+    <span class="mb-attach-status" data-state="connecting" id="mb-status">connecting...</span>
+  </header>
+  <div id="mb-terminal" aria-label="Terminal output"></div>
+
+  <script src="{{ xterm.js }}"></script>
+  <script src="{{ xterm.fit }}"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    var BASE = {{ base | tojson }};
+    var HOST_KEY = {{ host_key | tojson }};
+    var TMUX_USER = {{ tmux_user | tojson }};
+    var SESSION_NAME = {{ session_name | tojson }};
+
+    var statusEl = document.getElementById('mb-status');
+    var termEl = document.getElementById('mb-terminal');
+
+    function setStatus(state, msg) {
+      statusEl.dataset.state = state;
+      statusEl.textContent = msg;
+    }
+
+    var term = new window.Terminal({
+      cursorBlink: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontSize: 14,
+      theme: { background: '#0b0b0b', foreground: '#dddddd', cursor: '#a9d1ff', selectionBackground: '#3a3a4a' },
+      scrollback: 10000,
+      convertEol: false,
+    });
+    var fitAddon = new window.FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(termEl);
+    fitAddon.fit();
+
+    var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var wsUrl = wsProto + '//' + window.location.host + BASE +
+                '/ws/' + encodeURIComponent(HOST_KEY) +
+                '/' + encodeURIComponent(TMUX_USER) +
+                '/' + encodeURIComponent(SESSION_NAME);
+
+    var ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    var connected = false;
+
+    ws.addEventListener('open', function () {
+      connected = true;
+      setStatus('open', 'connected');
+      sendResize();
+      term.focus();
+    });
+
+    ws.addEventListener('message', function (ev) {
+      var data = ev.data;
+      if (data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(data));
+      } else if (typeof data === 'string') {
+        try {
+          var obj = JSON.parse(data);
+          if (obj && obj.type === 'error') {
+            term.writeln('\r\n\x1b[31m[bridge error] ' + obj.message + '\x1b[0m');
+            return;
+          }
+        } catch (e) { /* not JSON - raw text */ }
+        term.write(data);
+      } else if (data && data.arrayBuffer) {
+        data.arrayBuffer().then(function (buf) { term.write(new Uint8Array(buf)); });
+      }
+    });
+
+    ws.addEventListener('close', function (ev) {
+      connected = false;
+      setStatus('closed', 'disconnected' + (ev.code ? (' (' + ev.code + ')') : ''));
+      term.writeln('\r\n\x1b[33m[bridge closed]\x1b[0m');
+    });
+
+    ws.addEventListener('error', function () { setStatus('error', 'connection error'); });
+
+    term.onData(function (data) {
+      if (!connected) return;
+      ws.send(JSON.stringify({ type: 'input', data: data }));
+    });
+
+    function sendResize() {
+      if (!connected) return;
+      fitAddon.fit();
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+
+    var resizeT = null;
+    window.addEventListener('resize', function () {
+      if (resizeT) clearTimeout(resizeT);
+      resizeT = setTimeout(sendResize, 80);
+    });
+
+    setInterval(function () {
+      if (connected) { try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {} }
+    }, 30000);
+  })();
+  </script>
+</body>
+</html>

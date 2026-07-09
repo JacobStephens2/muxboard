@@ -18,6 +18,7 @@ def test_allow_all_allows():
     assert p is not None
     assert p.name == "svc"
     assert p.allowed_users is None
+    assert p.create_users is None
 
 
 def test_token_rejects_short_secret():
@@ -43,3 +44,32 @@ def test_principal_may_use_scope():
     assert p.may_use("deploy")
     assert not p.may_use("ops")
     assert Principal(name="admin").may_use("anything")
+
+
+def test_principal_create_scope_defaults_to_use_scope():
+    p = Principal(name="u", allowed_users=frozenset({"deploy"}))
+    assert p.may_create("deploy")
+    assert not p.may_create("ops")
+
+
+def test_principal_create_scope_can_be_narrower():
+    p = Principal(
+        name="u",
+        allowed_users=frozenset({"deploy", "ops"}),
+        create_users=frozenset({"deploy"}),
+    )
+    assert p.may_use("ops")
+    assert not p.may_create("ops")
+    assert p.may_create("deploy")
+
+
+def test_token_auth_create_scope():
+    auth = token_auth(
+        "a" * 20,
+        allowed_users=frozenset({"alice", "shared"}),
+        create_users=frozenset({"alice"}),
+    )
+    p = auth(_req(headers={"X-Muxboard-Token": "a" * 20}))
+    assert p is not None
+    assert p.may_use("shared")
+    assert not p.may_create("shared")

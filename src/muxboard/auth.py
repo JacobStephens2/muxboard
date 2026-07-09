@@ -22,7 +22,8 @@ Three building blocks ship in the box:
 
 For anything multi-user, write your own ``authorize`` that reads your existing
 session/SSO and returns a Principal whose :attr:`Principal.allowed_users`
-scopes which tmux users that person may touch.
+scopes which tmux users that person may touch. If session creation should be
+narrower than attach/kill/list, set :attr:`Principal.create_users` too.
 """
 
 from __future__ import annotations
@@ -50,13 +51,25 @@ class Principal:
         allowed_users: tmux users this principal may manage, or ``None`` for
             "every tmux user configured on the host." Use a narrow set to give
             a person access only to their own sessions on a shared box.
+        create_users: tmux users this principal may create *new* sessions as.
+            ``None`` means "same as ``allowed_users``" for backwards
+            compatibility. Set an empty frozenset to allow attach/kill/list
+            while denying session creation.
     """
 
     name: str
     allowed_users: Optional[frozenset[str]] = None
+    create_users: Optional[frozenset[str]] = None
 
     def may_use(self, tmux_user: str) -> bool:
         return self.allowed_users is None or tmux_user in self.allowed_users
+
+    def may_create(self, tmux_user: str) -> bool:
+        if not self.may_use(tmux_user):
+            return False
+        if self.create_users is None:
+            return True
+        return tmux_user in self.create_users
 
 
 def deny_all(_request: Request) -> Optional[Principal]:
@@ -89,6 +102,7 @@ def token_auth(
     query_param: str = "token",
     name: str = "token-user",
     allowed_users: Optional[frozenset[str]] = None,
+    create_users: Optional[frozenset[str]] = None,
 ) -> Authorizer:
     """Shared-secret gate.
 
@@ -106,6 +120,7 @@ def token_auth(
         header / query_param: Where to look for the secret.
         name: Principal name recorded in audit logs.
         allowed_users: Optional tmux-user scope for the token's principal.
+        create_users: Optional narrower scope for creating new sessions.
     """
     if not secret or len(secret) < 16:
         raise ValueError(
@@ -119,7 +134,11 @@ def token_auth(
         if not presented:
             return None
         if hmac.compare_digest(presented.encode("utf-8"), secret_b):
-            return Principal(name=name, allowed_users=allowed_users)
+            return Principal(
+                name=name,
+                allowed_users=allowed_users,
+                create_users=create_users,
+            )
         return None
 
     return _authorize

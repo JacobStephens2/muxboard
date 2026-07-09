@@ -240,6 +240,8 @@ class Muxboard:
         @bp.route("/api/<key>/<user>/create", methods=["POST"])
         def api_create(key: str, user: str):
             principal, host = self._guard_mutation(key, user)
+            if not principal.may_create(user):
+                abort(403)
             name = (request.form.get("name") or "").strip()
             command = (request.form.get("command") or "").strip() or None
             if not name:
@@ -251,7 +253,7 @@ class Muxboard:
             self._safe_refresh(key)
             self.audit("muxboard.create", host=key, target_user=user,
                        session_name=name, command=command, by=principal.name)
-            return jsonify({"ok": True})
+            return jsonify({"ok": True, "name": name})
 
         @bp.route("/<key>/<user>/<path:name>/attach")
         def attach_view(key: str, user: str, name: str):

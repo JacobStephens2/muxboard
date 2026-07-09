@@ -41,7 +41,9 @@ def authorize(request: Request) -> Principal | None:
     """Plug in your own auth. Here: a Flask session set by your SSO layer.
 
     Returns a Principal scoped to the tmux users this person may manage, or
-    None to deny. Admins get all users (allowed_users=None).
+    None to deny. Admins get all users (allowed_users=None). The deploy-team
+    example can inspect both ops and deploy sessions, but can only create new
+    sessions as deploy so new work does not appear under a shared ops account.
     """
     email = session.get("email")
     if not email:
@@ -49,7 +51,11 @@ def authorize(request: Request) -> Principal | None:
     if email in {"sre-lead@example.com"}:
         return Principal(name=email, allowed_users=None)
     if email.endswith("@example.com"):
-        return Principal(name=email, allowed_users=frozenset({"deploy"}))
+        return Principal(
+            name=email,
+            allowed_users=frozenset({"ops", "deploy"}),
+            create_users=frozenset({"deploy"}),
+        )
     return None
 
 

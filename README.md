@@ -11,6 +11,8 @@ It exists because the alternative - SSH into each box, remember which `tmux` soc
 - A dashboard at `/<prefix>/` listing every configured host, each host's managed tmux users, and each user's sessions (window count, created time, last activity, attached flag).
 - Create a session (optionally with a startup command), kill a session (behind a type-the-name confirm gate), and attach a live terminal in a new tab.
 - A background sweep that refreshes the inventory every 60 seconds so the dashboard reads from a cache and never blocks on SSH.
+- Numeric-aware session ordering, so operator-style names like `1`, `2`, `3`, `22` render in the order humans expect.
+- A post-create spotlight in the dashboard so the new session is scrolled into view and marked after the page reloads.
 - Per-principal and global caps on concurrent attaches, so one account cannot exhaust file descriptors, PIDs, or RAM.
 
 ## Install
@@ -100,11 +102,14 @@ A principal who passes your `authorize` gate can run arbitrary commands as any o
 
 For anything multi-user, write your own `authorize` that reads your existing session or SSO and returns a `Principal` whose `allowed_users` scopes which tmux users that person may touch. `examples/fleet.py` shows the pattern. A scoped principal's dashboard, JSON API, attach page, and WebSocket are all filtered to their `allowed_users`; an out-of-scope user returns 403, not 404, because hiding the existence of the user buys nothing once you are authenticated.
 
+Session creation can be narrower than listing, attaching, and killing. Set `Principal(create_users=frozenset({...}))` when a person may inspect shared service-account sessions but should spawn new work only as their own Unix account. If `create_users` is `None`, creation follows `allowed_users` for backwards compatibility; if it is an empty set, that principal cannot create sessions at all.
+
 ## The attack surface, and what is already mitigated
 
 - **Command injection.** Every session name and startup command coming from a client is passed through `shlex.quote`, and no command on the muxboard side ever runs through a shell (`shell=True` is never used). Session-name *creation* is further restricted to `[A-Za-z0-9_-]{1,64}`. Attach and kill operate on existing names, which tmux itself constrains.
 - **Cross-site WebSocket hijacking.** Set `allowed_origins` and the WebSocket handshake rejects any browser `Origin` not on the list. If you leave it unset the check is disabled and muxboard logs a warning - do not ship to production that way. Non-browser clients (which omit `Origin`) are allowed through, which is fine for ops tooling but means the Origin check is a defense for browser victims, not an authentication mechanism.
 - **Accidental destructive POSTs.** A kill requires the client to echo the exact session name in a `confirm` field, so a stray same-site POST (a future XSS, a fat-fingered curl, a malicious extension) cannot silently kill a session.
+- **Create-as attribution drift.** For shared boxes, prefer a narrow `create_users` scope so new sessions are attributed to the operator's own Unix account, not a shared service account. This does not make existing shared sessions read-only; it only gates creation.
 - **Resource exhaustion.** Concurrent attaches are capped per principal (default 5) and globally (default 30). Each attach has a 6-hour hard lifetime and a 4 MiB output-queue ceiling, after which the bridge tears down the whole SSH/tmux process group - no leaked fds, no zombies.
 - **The authorize callable itself throwing.** If your `authorize` raises, muxboard logs it and denies. Failure is closed.
 

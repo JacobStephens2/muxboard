@@ -57,6 +57,19 @@ def valid_new_session_name(name: str) -> bool:
     return bool(_NEW_SESSION_RE.match(name))
 
 
+def _natural_key(name: str) -> list[tuple[int, int, str]]:
+    """Numeric-aware sort key for tmux session names.
+
+    Names like ``1``, ``2``, ``22`` are common in operator dashboards; natural
+    ordering keeps them in numeric order instead of lexicographic order.
+    """
+    return [
+        (0, int(part), "") if part.isdigit() else (1, 0, part.lower())
+        for part in re.split(r"(\d+)", name)
+        if part
+    ]
+
+
 def _as_user_prefix(target_user: str, login_user: str) -> str:
     """Shell prefix that elevates from login_user to target_user.
 
@@ -222,6 +235,8 @@ class TmuxController:
                 log.debug("tmux list (%s): bad ints in %r", host_key, raw)
                 continue
             sessions_by_user.setdefault(user, []).append(entry)
+        for sessions in sessions_by_user.values():
+            sessions.sort(key=lambda e: _natural_key(e["name"]))
         return {"sessions": sessions_by_user, "errors": errors}
 
     def list_host(self, host: Host) -> dict[str, Any]:

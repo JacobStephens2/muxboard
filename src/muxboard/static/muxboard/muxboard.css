@@ -48,6 +48,7 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 .mb-sessions { width: 100%; border-collapse: collapse; font-size: 13px; }
 .mb-sessions th { text-align: left; color: var(--mb-muted); font-weight: 500; padding: 4px 10px; border-bottom: 1px solid var(--mb-border); }
 .mb-sessions td { padding: 6px 10px; border-bottom: 1px solid var(--mb-border); }
+.mb-session-name { white-space: nowrap; }
 .mb-actions { display: flex; gap: 6px; }
 
 .mb-btn {
@@ -64,6 +65,18 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 .mb-badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; }
 .mb-badge-err { background: #3a1f1e; color: #ff938c; }
 .mb-badge-warn { background: #3a331a; color: #f0c860; }
+.mb-pill { display: inline-block; margin-left: 8px; padding: 1px 6px; border-radius: 999px; font-size: 10px; line-height: 1.4; vertical-align: middle; }
+.mb-pill-new { background: rgba(90, 169, 255, 0.16); color: #a9d1ff; border: 1px solid rgba(90, 169, 255, 0.45); }
+.mb-just-created { animation: mb-row-glow 2s ease-out 0s 4; }
+
+@keyframes mb-row-glow {
+  0% { background: rgba(90, 169, 255, 0.24); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mb-just-created { animation: none; background: rgba(90, 169, 255, 0.12); }
+}
 
 .mb-dialog {
   border: 1px solid var(--mb-border); border-radius: 10px;

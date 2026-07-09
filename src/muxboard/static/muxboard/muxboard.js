@@ -167,6 +167,7 @@
           go.disabled = false; go.textContent = 'Retry create';
           return;
         }
+        rememberNewSession(newCtx.host, newCtx.user, (res.body && res.body.name) || name);
         closeNew(); window.location.reload();
       })
       .catch(function (e) {
@@ -175,10 +176,76 @@
       });
   }
 
+  // ---------- highlight the just-created session after reload ----------
+
+  var NEW_SESSION_KEY = 'muxboard-new-session';
+
+  function rememberNewSession(host, user, name) {
+    if (!host || !user || !name) return;
+    try {
+      sessionStorage.setItem(NEW_SESSION_KEY, JSON.stringify({
+        host: String(host),
+        user: String(user),
+        name: String(name),
+      }));
+    } catch (e) {
+      // sessionStorage can be unavailable in some browser modes; creation
+      // still succeeded, so treat the highlight as best-effort.
+    }
+  }
+
+  function highlightNewSession() {
+    var raw;
+    try {
+      raw = sessionStorage.getItem(NEW_SESSION_KEY);
+      if (raw) sessionStorage.removeItem(NEW_SESSION_KEY);
+    } catch (e) {
+      return;
+    }
+    if (!raw) return;
+
+    var want;
+    try {
+      want = JSON.parse(raw);
+    } catch (e) {
+      return;
+    }
+    if (!want || !want.host || !want.user || !want.name) return;
+
+    var row = null;
+    $$('tr[data-mb-sess-host]').some(function (r) {
+      if (r.getAttribute('data-mb-sess-host') === want.host &&
+          r.getAttribute('data-mb-sess-user') === want.user &&
+          r.getAttribute('data-mb-sess-name') === want.name) {
+        row = r;
+        return true;
+      }
+      return false;
+    });
+    if (!row) return;
+
+    var nameCell = $('.mb-session-name', row);
+    if (nameCell && !$('.mb-pill-new', nameCell)) {
+      var pill = document.createElement('span');
+      pill.className = 'mb-pill mb-pill-new';
+      pill.textContent = 'new';
+      nameCell.appendChild(pill);
+    }
+
+    row.classList.add('mb-just-created');
+    try {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (e) {
+      row.scrollIntoView();
+    }
+    setTimeout(function () { row.classList.remove('mb-just-created'); }, 8000);
+  }
+
   // ---------- wire up ----------
 
   document.addEventListener('DOMContentLoaded', function () {
     applyRelativeTimes(document);
+    highlightNewSession();
 
     document.addEventListener('click', function (ev) {
       var t = ev.target;

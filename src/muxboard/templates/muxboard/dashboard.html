@@ -41,8 +41,10 @@
         <div class="mb-user">
           <div class="mb-user-head">
             <code class="mb-user-name">{{ user }}</code>
+            {% if principal.may_create(user) %}
             <button type="button" class="mb-btn mb-btn-sm"
                     data-mb-new-host="{{ host.key }}" data-mb-new-user="{{ user }}">+ new session</button>
+            {% endif %}
             {% if user_err %}<span class="mb-badge mb-badge-warn">{{ user_err }}</span>{% endif %}
           </div>
 
@@ -53,8 +55,10 @@
             </thead>
             <tbody>
             {% for s in sessions %}
-              <tr>
-                <td><code>{{ s.name }}</code></td>
+              <tr data-mb-sess-host="{{ host.key }}"
+                  data-mb-sess-user="{{ s.user }}"
+                  data-mb-sess-name="{{ s.name }}">
+                <td class="mb-session-name"><code>{{ s.name }}</code></td>
                 <td>{{ s.windows }}</td>
                 <td><time data-relative-unix="{{ s.created }}"></time></td>
                 <td><time data-relative-unix="{{ s.activity }}"></time></td>

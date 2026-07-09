@@ -84,6 +84,20 @@ def test_parse_list_output_roundtrip():
     assert parsed["errors"]["ops"] == "sudo refused"
 
 
+def test_parse_list_output_natural_sorts_session_names():
+    rows = [
+        SEP.join(["deploy", "22", "1", "1700000000", "0", "1700000000", "$22"]),
+        SEP.join(["deploy", "3", "1", "1700000000", "0", "1700000000", "$3"]),
+        SEP.join(["deploy", "alpha10", "1", "1700000000", "0", "1700000000", "$10"]),
+        SEP.join(["deploy", "2", "1", "1700000000", "0", "1700000000", "$2"]),
+        SEP.join(["deploy", "alpha2", "1", "1700000000", "0", "1700000000", "$9"]),
+    ]
+    parsed = TmuxController._parse_list_output("\n".join(rows), host_key="x")
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+        "2", "3", "22", "alpha2", "alpha10",
+    ]
+
+
 def test_parse_list_output_skips_garbage():
     parsed = TmuxController._parse_list_output("not-enough-fields\n", host_key="x")
     assert parsed["sessions"] == {}

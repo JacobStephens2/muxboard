@@ -61,6 +61,38 @@ def test_scoped_principal_forbidden_user_403():
     assert r.status_code == 403
 
 
+def test_create_scope_can_be_narrower_than_use_scope():
+    app, _ = _app(lambda r: Principal(
+        name="u",
+        allowed_users=frozenset({"alice", "bob"}),
+        create_users=frozenset({"alice"}),
+    ))
+    client = app.test_client()
+    r = client.post("/mux/api/local/bob/create", data={"name": "x"})
+    assert r.status_code == 403
+
+
+def test_create_returns_created_name():
+    app, board = _app(lambda r: Principal(
+        name="u",
+        allowed_users=frozenset({"alice", "bob"}),
+        create_users=frozenset({"alice"}),
+    ))
+    called = {}
+
+    def fake_create(host, user, name, command=None):
+        called.update(host=host.key, user=user, name=name, command=command)
+
+    board.controller.create_session = fake_create
+    board.controller.refresh_host = lambda key: {"ok": True}
+
+    client = app.test_client()
+    r = client.post("/mux/api/local/alice/create", data={"name": "new1"})
+    assert r.status_code == 200
+    assert r.get_json() == {"ok": True, "name": "new1"}
+    assert called == {"host": "local", "user": "alice", "name": "new1", "command": None}
+
+
 def test_unknown_host_404():
     app, _ = _app(lambda r: Principal(name="admin"))
     client = app.test_client()

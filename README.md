@@ -6,6 +6,8 @@ It exists because the alternative - SSH into each box, remember which `tmux` soc
 
 **Read the threat model below before you deploy this.** muxboard hands out authenticated remote-shell access over the web. A misconfigured gate is a root shell for a stranger. The defaults are built to fail closed, but the security of your deployment is a property of *your* configuration, not of this README.
 
+Product site (static): **https://muxboard.stephens.page** - source in [`site/`](site/). Deploy with `rsync` to the Apache docroot; see [`site/README.md`](site/README.md).
+
 ## What you get
 
 - A dashboard at `/<prefix>/` listing every configured host, each host's managed tmux users, and each user's sessions (window count, created time, last activity, attached flag).

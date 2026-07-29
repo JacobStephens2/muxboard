@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>muxboard - a web dashboard for tmux across a fleet</title>
+  <meta name="description" content="muxboard is a Flask-embeddable web dashboard for managing tmux sessions across one host or a fleet, with live in-browser attach, create-specific scopes, default-deny auth, and a thorough threat model.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230e0f12'/><text y='72' x='50' font-size='64' text-anchor='middle' fill='%235aa9ff' font-family='monospace'>&gt;_</text></svg>">
+  <style>
+    :root {
+      --bg: #0e0f12;
+      --panel: #171a1f;
+      --border: #2a2e36;
+      --fg: #d7dbe0;
+      --muted: #8a909a;
+      --accent: #5aa9ff;
+      --green: #6fdc8c;
+      --danger: #e5534b;
+      --warn: #f0c860;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 940px; margin: 0 auto; padding: 0 22px; }
+
+    header.nav {
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: rgba(14,15,18,0.85);
+      backdrop-filter: blur(8px); z-index: 10;
+    }
+    .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 58px; }
+    .brand { font-weight: 700; font-size: 18px; letter-spacing: 0.3px; }
+    .brand .prompt { color: var(--accent); }
+    .nav a { color: var(--muted); margin-left: 20px; font-size: 14px; }
+    .nav a:hover { color: var(--fg); text-decoration: none; }
+
+    .hero { padding: 72px 0 36px; text-align: center; }
+    .hero h1 { font-size: 52px; margin: 0 0 8px; letter-spacing: -0.5px; }
+    .hero h1 .prompt { color: var(--accent); }
+    .tagline { font-size: 21px; color: var(--fg); margin: 0 auto 10px; max-width: 680px; }
+    .subline { font-size: 16px; color: var(--muted); margin: 0 auto 28px; max-width: 640px; }
+    .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-block; padding: 11px 20px; border-radius: 8px;
+      border: 1px solid var(--border); font-size: 15px; font-weight: 600;
+    }
+    .btn-primary { background: var(--accent); color: #08111f; border-color: var(--accent); }
+    .btn-primary:hover { text-decoration: none; filter: brightness(1.08); }
+    .btn-ghost { color: var(--fg); background: #20252e; }
+    .btn-ghost:hover { text-decoration: none; border-color: var(--accent); }
+
+    /* terminal mock */
+    .term {
+      margin: 40px auto 0; max-width: 760px; background: #0b0c0f;
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+      text-align: left; box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    }
+    .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: #14161b; }
+    .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .dot.r { background: #ff5f56; } .dot.y { background: #ffbd2e; } .dot.g { background: #27c93f; }
+    .term-title { margin-left: 8px; color: var(--muted); font-size: 12px; }
+    .term pre { margin: 0; padding: 18px; font-size: 13.5px; line-height: 1.55; overflow-x: auto; color: var(--fg); }
+    .term .c-accent { color: var(--accent); }
+    .term .c-green { color: var(--green); }
+    .term .c-muted { color: var(--muted); }
+    .term .c-warn { color: var(--warn); }
+
+    section { padding: 46px 0; border-top: 1px solid var(--border); }
+    section h2 { font-size: 26px; margin: 0 0 6px; }
+    section .lead { color: var(--muted); margin: 0 0 26px; max-width: 700px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 20px; }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+    .card .icon { color: var(--accent); font-size: 18px; }
+
+    .security {
+      background: #1d1614; border: 1px solid #4a2b27; border-radius: 10px;
+      padding: 18px 20px; display: flex; gap: 14px; align-items: flex-start;
+    }
+    .security .badge { color: var(--warn); font-size: 22px; line-height: 1; }
+    .security strong { color: #ffb4ad; }
+    .security p { margin: 0; color: #e4c9c5; font-size: 14.5px; }
+
+    pre.block {
+      background: #0b0c0f; border: 1px solid var(--border); border-radius: 10px;
+      padding: 16px 18px; overflow-x: auto; font-size: 13.5px; color: var(--fg); margin: 0 0 16px;
+    }
+    pre.block .cmt { color: var(--muted); }
+    pre.block .kw { color: var(--accent); }
+    .copy-row { display: flex; gap: 10px; align-items: stretch; margin-bottom: 18px; }
+    .copy-row pre.block { flex: 1; margin: 0; }
+    .copy-btn { border: 1px solid var(--border); background: #20252e; color: var(--fg); border-radius: 8px; padding: 0 14px; cursor: pointer; font-size: 13px; }
+    .copy-btn:hover { border-color: var(--accent); }
+
+    footer { border-top: 1px solid var(--border); padding: 30px 0 48px; color: var(--muted); font-size: 14px; }
+    footer .row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+    @media (max-width: 560px) {
+      .hero h1 { font-size: 40px; }
+      .tagline { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <span class="brand"><span class="prompt">&gt;_</span> muxboard</span>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#install">Install</a>
+        <a href="#security">Security</a>
+        <a href="https://github.com/JacobStephens2/muxboard">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero" style="border-top:none">
+      <h1><span class="prompt">&gt;_</span> muxboard</h1>
+      <p class="tagline">A web dashboard for your tmux sessions - across one host or a whole fleet, with a live terminal in the browser.</p>
+      <p class="subline">A Flask blueprint you embed in your own app. List, create, kill, and attach tmux sessions over SSH, with create-specific scopes, default-deny auth, and a threat model that takes "remote shell over the web" seriously.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/JacobStephens2/muxboard">View on GitHub</a>
+        <a class="btn btn-ghost" href="#install">Quickstart</a>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="term-title mono">muxboard - web1, db1, build</span>
+        </div>
+<pre class="mono"><span class="c-muted"># the dashboard, in one glance</span>
+<span class="c-accent">web1</span>  <span class="c-muted">(prod)</span>
+  deploy   <span class="c-green">1</span>            1 window    idle 4m    <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
+  deploy   <span class="c-green">2</span>            1 window    new        <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
+  deploy   <span class="c-green">22</span>           2 windows   attached   <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
+<span class="c-accent">db1</span>   <span class="c-muted">(primary)</span>
+  ops      <span class="c-green">migration</span>     1 window    attached   <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
+<span class="c-accent">build</span>
+  ci       <span class="c-green">nightly</span>       3 windows   idle 1h    <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
+</pre>
+      </div>
+    </section>
+
+    <section id="features">
+      <h2>What it does</h2>
+      <p class="lead">Everything you would SSH in to do, surfaced in one cache-backed dashboard.</p>
+      <div class="grid">
+        <div class="card">
+          <div class="icon">&#9783;</div>
+          <h3>Multi-host inventory</h3>
+          <p>Point it at one machine or a fleet over SSH (key or password). A single host is just the n=1 case of the same config.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#9654;</div>
+          <h3>Live in-browser attach</h3>
+          <p>A real terminal over a WebSocket-to-PTY bridge and xterm.js. Resize, scrollback, and read-along with other clients.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#43;</div>
+          <h3>Create, kill, list</h3>
+          <p>Spin up a session with a startup command, kill one behind a type-the-name confirm gate, and watch them all in a sweep-refreshed list.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#128274;</div>
+          <h3>Default-deny auth</h3>
+          <p>You must pass an authorizer. Gates ship for tokens, signed cookies, and proxy headers - or write your own and scope each person to specific users.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#8644;</div>
+          <h3>Reuse existing login</h3>
+          <p>Mount under a same-host path like <span class="mono">/console/</span> and call <span class="mono">signed_cookie_auth</span> with the secret your ops app already signs. No second hostname, no second password. Browser fetch and WebSocket attach carry the cookie.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#9881;</div>
+          <h3>Per-user multiplexing</h3>
+          <p>Manage several Unix users' sockets per host via <span class="mono">sudo -n -u</span>, so one login can see deploy, ops, and ci sessions.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#9737;</div>
+          <h3>Create scopes</h3>
+          <p>Let a principal inspect shared service-account sessions while creating new work only as their own Unix account.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#8597;</div>
+          <h3>Operator ergonomics</h3>
+          <p>Numeric session names sort naturally, and a newly created session is marked and scrolled into view after the dashboard reloads.</p>
+        </div>
+        <div class="card">
+          <div class="icon">&#9888;</div>
+          <h3>Caps and teardown</h3>
+          <p>Per-principal and global attach limits, a 6-hour lifetime cap, and full process-group teardown so nothing leaks fds or zombies.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="install">
+      <h2>Quickstart</h2>
+      <p class="lead">Embed the blueprint in a Flask app. Install into a project venv - not the system Python. On Debian/Ubuntu, bare <span class="mono">pip install</span> fails with <span class="mono">externally-managed-environment</span> (PEP 668); that is intentional. The <span class="mono">[deploy]</span> extra pulls <span class="mono">gunicorn</span> and <span class="mono">gevent</span> (required for WebSocket attach).</p>
+      <div class="copy-row">
+        <pre class="block" id="install-cmd">python3 -m venv .venv
+source .venv/bin/activate
+pip install "muxboard[deploy] @ git+https://github.com/JacobStephens2/muxboard"</pre>
+        <button class="copy-btn" data-copy="install-cmd">Copy</button>
+      </div>
+<pre class="block"><span class="cmt"># Prefer signed_cookie_auth when an ops app already logs people in
+# (same-host path /console/ - no second password). token_auth is fine for scripts.</span>
+<span class="kw">import</span> os
+<span class="kw">from</span> flask <span class="kw">import</span> Flask
+<span class="kw">from</span> muxboard <span class="kw">import</span> Host, Muxboard, signed_cookie_auth
+
+board = Muxboard(
+    hosts=[Host(key=<span class="c-green">"local"</span>, hostname=<span class="c-green">"localhost"</span>,
+                tmux_users=(<span class="c-green">"deploy"</span>,), local=<span class="kw">True</span>)],
+    authorize=signed_cookie_auth(
+        os.environ[<span class="c-green">"SESSION_SECRET"</span>],
+        cookie=<span class="c-green">"dash_session"</span>, salt=<span class="c-green">"dashboard-session"</span>,
+        name=<span class="c-green">"ops"</span>, allowed_users=frozenset({<span class="c-green">"deploy"</span>}),
+    ),
+    allowed_origins=[<span class="c-green">"https://ops.example.com"</span>],
+)
+app = Flask(__name__)
+board.init_app(app, url_prefix=<span class="c-green">"/console"</span>)
+board.start()</pre>
+<pre class="block"><span class="cmt"># gunicorn -k gevent -w 1 -b 127.0.0.1:3492 app:app
+# Reverse-proxy /console/ with WebSocket upgrade. systemd: PrivateTmp=false if local=True.</span></pre>
+      <p class="lead" style="margin-top:6px">Deploy checklist (Apache + systemd), fleet example, and the threat model live in the <a href="https://github.com/JacobStephens2/muxboard#readme">README</a> and <a href="https://github.com/JacobStephens2/muxboard/tree/main/examples/deploy">examples/deploy</a>.</p>
+    </section>
+
+    <section id="security">
+      <h2>Read the threat model first</h2>
+      <p class="lead">muxboard is not a toy widget. Treat it with the seriousness you would treat <span class="mono">sshd</span>.</p>
+      <div class="security">
+        <span class="badge">&#9888;</span>
+        <p><strong>This grants authenticated remote-shell access over the web.</strong> A misconfigured gate is a root shell for a stranger. The defaults fail closed - an unconfigured board denies everything - but the security of your deployment is a property of your configuration. The README documents the attack surface, what is already mitigated (command-injection quoting, cross-site WebSocket protection, create scopes, confirm gates, resource caps), and what you must do yourself (TLS, rate limiting, least-privilege <span class="mono">tmux_users</span>).</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap row">
+      <span>muxboard - MIT licensed, alpha (0.1.2). Built by <a href="https://stephens.page">Jacob Stephens</a>.</span>
+      <span><a href="https://github.com/JacobStephens2/muxboard">github.com/JacobStephens2/muxboard</a></span>
+    </div>
+  </footer>
+
+  <script>
+    document.querySelectorAll('.copy-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var el = document.getElementById(b.getAttribute('data-copy'));
+        if (!el) return;
+        navigator.clipboard.writeText(el.textContent.trim()).then(function () {
+          var t = b.textContent; b.textContent = 'Copied';
+          setTimeout(function () { b.textContent = t; }, 1400);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

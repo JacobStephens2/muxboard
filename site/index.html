@@ -74,6 +74,14 @@
     .term .c-green { color: var(--green); }
     .term .c-muted { color: var(--muted); }
     .term .c-warn { color: var(--warn); }
+    .term.shot { max-width: 860px; }
+    .term.shot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      vertical-align: middle;
+      background: #0b0c0f;
+    }
 
     section { padding: 46px 0; border-top: 1px solid var(--border); }
     section h2 { font-size: 26px; margin: 0 0 6px; }
@@ -136,21 +144,12 @@
         <a class="btn btn-ghost" href="#install">Quickstart</a>
       </div>
 
-      <div class="term">
+      <div class="term shot">
         <div class="term-bar">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="term-title mono">muxboard - web1, db1, build</span>
+          <span class="term-title mono">muxboard dashboard</span>
         </div>
-<pre class="mono"><span class="c-muted"># the dashboard, in one glance</span>
-<span class="c-accent">web1</span>  <span class="c-muted">(prod)</span>
-  deploy   <span class="c-green">1</span>            1 window    idle 4m    <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
-  deploy   <span class="c-green">2</span>            1 window    new        <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
-  deploy   <span class="c-green">22</span>           2 windows   attached   <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
-<span class="c-accent">db1</span>   <span class="c-muted">(primary)</span>
-  ops      <span class="c-green">migration</span>     1 window    attached   <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
-<span class="c-accent">build</span>
-  ci       <span class="c-green">nightly</span>       3 windows   idle 1h    <span class="c-accent">[attach]</span> <span class="c-warn">[kill]</span>
-</pre>
+        <img src="dashboard.png" width="1240" height="462" alt="muxboard dashboard: stephens droplet host with jacob sessions chart35 and drome, attach and kill actions">
       </div>
     </section>
 

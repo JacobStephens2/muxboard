@@ -2,9 +2,9 @@
 
 muxboard is a Flask blueprint that puts a web dashboard over `tmux ls` / `new-session` / `kill-session` / `attach` for one host or a fleet of hosts, with a live in-browser terminal backed by xterm.js. The single-host case is the trivial `n = 1` instance of the same inventory model the fleet case uses - there is no separate code path for "just my laptop."
 
-**Especially useful for long-running cloud agents.** Kick off a coding agent (Codex, Claude Code, Cursor, Aider, …) in a tmux session on a droplet or fleet host, close your laptop, and reattach from any browser later - check progress, steer, or just confirm it is still working. The agent keeps running in tmux whether you are attached or not; muxboard is the control plane that lists every session and drops you into a live terminal without juggling SSH windows.
+**Especially useful for long-running AI agents.** Kick off an AI coding agent (Codex, Claude Code, Cursor, Aider, …) in a tmux session on a droplet or fleet host, close your laptop, and reattach from any browser later - check progress, steer, or just confirm it is still working. The AI agent keeps running in tmux whether you are attached or not; muxboard is the control plane that lists every session and drops you into a live terminal without juggling SSH windows.
 
-It also exists because the older ops problem - SSH into each box, remember which `tmux` socket belongs to which service account, `attach` by hand - does not scale past about two machines, and because a running agent, migration, or build is far easier to babysit from a browser tab than from a fan-out of terminals.
+It also exists because the older ops problem - SSH into each box, remember which `tmux` socket belongs to which service account, `attach` by hand - does not scale past about two machines, and because a running AI agent, migration, or build is far easier to babysit from a browser tab than from a fan-out of terminals.
 
 **Read the threat model below before you deploy this.** muxboard hands out authenticated remote-shell access over the web. A misconfigured gate is a root shell for a stranger. The defaults are built to fail closed, but the security of your deployment is a property of *your* configuration, not of this README.
 
@@ -12,8 +12,8 @@ Product site (static): **https://muxboard.stephens.page** - source in [`site/`](
 
 ## What you get
 
-- A dashboard at `/<prefix>/` listing every configured host, each host's managed tmux users, and each user's sessions (window count, created time, last activity, attached flag) - one place to see every long-running agent or job.
-- Create a session (optionally with a startup command), kill a session (behind a type-the-name confirm gate), and attach a live terminal in a new tab so you can leave an agent overnight and rejoin from a cafe without SSH gymnastics.
+- A dashboard at `/<prefix>/` listing every configured host, each host's managed tmux users, and each user's sessions (window count, created time, last activity, attached flag) - one place to see every long-running AI agent or job.
+- Create a session (optionally with a startup command), kill a session (behind a type-the-name confirm gate), and attach a live terminal in a new tab so you can leave an AI agent overnight and rejoin from a cafe without SSH gymnastics.
 - A background sweep that refreshes the inventory every 60 seconds so the dashboard reads from a cache and never blocks on SSH.
 - Numeric-aware session ordering, so operator-style names like `1`, `2`, `3`, `22` render in the order humans expect.
 - A post-create spotlight in the dashboard so the new session is scrolled into view and marked after the page reloads.

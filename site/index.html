@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>muxboard - a web dashboard for tmux across a fleet</title>
-  <meta name="description" content="muxboard is a Flask-embeddable web dashboard for managing tmux sessions across one host or a fleet, with live in-browser attach, create-specific scopes, default-deny auth, and a thorough threat model.">
+  <title>muxboard - manage long-running cloud agents in the browser</title>
+  <meta name="description" content="muxboard is a Flask-embeddable web dashboard for tmux: manage long-running cloud agents across one host or a fleet, reattach from any browser, with create-specific scopes, default-deny auth, and a thorough threat model.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230e0f12'/><text y='72' x='50' font-size='64' text-anchor='middle' fill='%235aa9ff' font-family='monospace'>&gt;_</text></svg>">
   <style>
     :root {
@@ -138,8 +138,8 @@
   <main class="wrap">
     <section class="hero" style="border-top:none">
       <h1><span class="prompt">&gt;_</span> muxboard</h1>
-      <p class="tagline">A web dashboard for your tmux sessions - across one host or a whole fleet, with a live terminal in the browser.</p>
-      <p class="subline">A Flask blueprint you embed in your own app. List, create, kill, and attach tmux sessions over SSH, with create-specific scopes, default-deny auth, and a threat model that takes "remote shell over the web" seriously.</p>
+      <p class="tagline">Manage long-running cloud agents from a browser. List every tmux session across one host or a fleet, attach live, leave the laptop closed.</p>
+      <p class="subline">Kick off Codex, Claude Code, Cursor, Aider, or any long job in tmux on a cloud box, walk away, and reattach later from any device. A Flask blueprint you embed in your own app - create, kill, and attach over SSH, with create-specific scopes, default-deny auth, and a threat model that takes "remote shell over the web" seriously.</p>
       <div class="cta">
         <a class="btn btn-primary" href="https://github.com/JacobStephens2/muxboard">View on GitHub</a>
         <a class="btn btn-ghost" href="#install">Quickstart</a>
@@ -164,8 +164,13 @@
 
     <section id="features">
       <h2>What it does</h2>
-      <p class="lead">Everything you would SSH in to do, surfaced in one cache-backed dashboard.</p>
+      <p class="lead">Built for long-running cloud agents and the ops work around them - everything you would SSH in to do, surfaced in one cache-backed dashboard.</p>
       <div class="grid">
+        <div class="card">
+          <div class="icon">&#9733;</div>
+          <h3>Long-running cloud agents</h3>
+          <p>Start an agent in tmux on a droplet, close the laptop, reattach from a cafe. The session keeps running whether you are connected or not; muxboard is how you find it and get back in.</p>
+        </div>
         <div class="card">
           <div class="icon">&#9783;</div>
           <h3>Multi-host inventory</h3>
@@ -174,12 +179,12 @@
         <div class="card">
           <div class="icon">&#9654;</div>
           <h3>Live in-browser attach</h3>
-          <p>A real terminal over a WebSocket-to-PTY bridge and xterm.js. Resize, scrollback, and read-along with other clients.</p>
+          <p>A real terminal over a WebSocket-to-PTY bridge and xterm.js. Check agent progress, steer mid-run, resize, and scrollback - no local SSH client required.</p>
         </div>
         <div class="card">
           <div class="icon">&#43;</div>
           <h3>Create, kill, list</h3>
-          <p>Spin up a session with a startup command, kill one behind a type-the-name confirm gate, and watch them all in a sweep-refreshed list.</p>
+          <p>Spin up a session with a startup command, kill one behind a type-the-name confirm gate, and watch every agent in a sweep-refreshed list.</p>
         </div>
         <div class="card">
           <div class="icon">&#128274;</div>

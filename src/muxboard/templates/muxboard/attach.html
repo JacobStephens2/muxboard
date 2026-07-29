@@ -9,14 +9,15 @@
 </head>
 <body class="mb-attach-page">
   <header class="mb-attach-header">
+    <a class="mb-btn mb-home mb-btn-sm" href="{{ base }}/">← Muxboard</a>
     {% if home_url %}
-    <a class="mb-btn mb-home mb-btn-sm" href="{{ home_url }}">{{ home_label }}</a>
+    <a class="mb-btn mb-btn-sm" href="{{ home_url }}">{{ home_label }}</a>
     {% endif %}
-    <a class="mb-btn mb-btn-sm" href="{{ base }}/">Sessions</a>
-    <span>muxboard:</span>
-    <code>{{ tmux_user }}@{{ host_label }}</code>
-    <span>session</span>
-    <code>{{ session_name }}</code>
+    <span class="mb-attach-meta">
+      <code>{{ tmux_user }}@{{ host_label }}</code>
+      <span>·</span>
+      <code>{{ session_name }}</code>
+    </span>
     <span class="mb-attach-status" data-state="connecting" id="mb-status">connecting...</span>
   </header>
   <div id="mb-terminal" aria-label="Terminal output"></div>

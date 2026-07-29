@@ -112,9 +112,21 @@ main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 /* ---- attach page ---- */
 body.mb-attach-page { margin: 0; background: #0b0b0b; color: #ddd; height: 100vh; display: flex; flex-direction: column;
   font-family: ui-sans-serif, system-ui, sans-serif; }
-.mb-attach-header { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #15171b; border-bottom: 1px solid #2a2e36; font-size: 13px; }
+.mb-attach-header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px; background: #15171b; border-bottom: 1px solid #2a2e36; font-size: 13px;
+}
 .mb-attach-header code { font-family: ui-monospace, Menlo, Consolas, monospace; color: #a9d1ff; }
+.mb-attach-meta { display: flex; align-items: center; gap: 6px; color: var(--mb-muted); min-width: 0; }
 .mb-attach-status { margin-left: auto; font-size: 12px; }
+/* Non-accent header buttons: keep :visited readable on dark attach chrome */
+.mb-attach-header a.mb-btn:not(.mb-home),
+.mb-attach-header a.mb-btn:not(.mb-home):link,
+.mb-attach-header a.mb-btn:not(.mb-home):visited,
+.mb-attach-header a.mb-btn:not(.mb-home):active {
+  color: var(--mb-fg);
+  text-decoration: none;
+}
 .mb-attach-status[data-state="open"] { color: #6fdc8c; }
 .mb-attach-status[data-state="closed"], .mb-attach-status[data-state="error"] { color: #ff938c; }
 .mb-attach-status[data-state="connecting"] { color: #f0c860; }

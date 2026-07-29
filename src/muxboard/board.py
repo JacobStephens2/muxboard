@@ -73,6 +73,8 @@ class Muxboard:
         attach_max_global: int = 30,
         allowed_origins: Optional[list[str]] = None,
         audit: Optional[AuditHook] = None,
+        home_url: Optional[str] = None,
+        home_label: str = "Dashboard",
         xterm_js_url: str = _XTERM_JS,
         xterm_css_url: str = _XTERM_CSS,
         xterm_fit_url: str = _XTERM_FIT,
@@ -91,6 +93,10 @@ class Muxboard:
                 block cross-site WebSocket hijacking.
             audit: Optional ``(event, **fields)`` callback for kill/create/
                 attach events. Defaults to a no-op.
+            home_url: Optional absolute or root-relative URL for a "back to
+                parent app" link in the top bar (e.g. ``"/"`` when mounted
+                under ``/console/`` on an ops dashboard). ``None`` hides it.
+            home_label: Link text for ``home_url`` (default ``"Dashboard"``).
         """
         self.controller = TmuxController(
             hosts,
@@ -107,6 +113,8 @@ class Muxboard:
             {o.rstrip("/") for o in allowed_origins} if allowed_origins else None
         )
         self.audit = audit or _noop_audit
+        self.home_url = home_url
+        self.home_label = home_label
         self.xterm = {
             "js": xterm_js_url, "css": xterm_css_url, "fit": xterm_fit_url,
         }
@@ -190,6 +198,8 @@ class Muxboard:
                 snapshot=snap,
                 base=self._url_prefix,
                 principal=principal,
+                home_url=self.home_url,
+                home_label=self.home_label,
             )
 
         @bp.route("/api/sessions")
@@ -273,6 +283,8 @@ class Muxboard:
                 session_name=name,
                 base=self._url_prefix,
                 xterm=self.xterm,
+                home_url=self.home_url,
+                home_label=self.home_label,
             )
 
     def _guard_mutation(self, key: str, user: str) -> tuple[Principal, Host]:

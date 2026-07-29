@@ -57,6 +57,9 @@ board = Muxboard(
         allowed_users=frozenset({TMUX_USER}),
     ),
     allowed_origins=[ORIGIN],
+    # Link back to the parent app (same host, root of the dashboard).
+    home_url="/",
+    home_label="Dashboard",
 )
 board.init_app(app, url_prefix=PREFIX)
 board.start()

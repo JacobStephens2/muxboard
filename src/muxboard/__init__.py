@@ -21,7 +21,7 @@ from .inventory import Host
 from .tmuxctl import TmuxctlError
 from .ttyproxy import AttachCapacityExceeded
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "Muxboard",

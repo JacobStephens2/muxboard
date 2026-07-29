@@ -8,7 +8,12 @@
 </head>
 <body class="muxboard" data-muxboard-base="{{ base }}">
   <header class="mb-topbar">
-    <h1>muxboard</h1>
+    <div class="mb-topbar-left">
+      {% if home_url %}
+      <a class="mb-btn mb-home" href="{{ home_url }}">{{ home_label }}</a>
+      {% endif %}
+      <h1>muxboard</h1>
+    </div>
     <div class="mb-topbar-right">
       {% if snapshot.last_sweep %}
         <span class="mb-sweep">swept <time data-relative-unix="{{ snapshot.last_sweep | int }}"></time></span>

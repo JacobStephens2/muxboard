@@ -9,6 +9,10 @@
 </head>
 <body class="mb-attach-page">
   <header class="mb-attach-header">
+    {% if home_url %}
+    <a class="mb-btn mb-home mb-btn-sm" href="{{ home_url }}">{{ home_label }}</a>
+    {% endif %}
+    <a class="mb-btn mb-btn-sm" href="{{ base }}/">Sessions</a>
     <span>muxboard:</span>
     <code>{{ tmux_user }}@{{ host_label }}</code>
     <span>session</span>

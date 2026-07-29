@@ -25,10 +25,30 @@ body.muxboard code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px; border-bottom: 1px solid var(--mb-border);
   background: var(--mb-panel); position: sticky; top: 0; z-index: 5;
+  gap: 12px; flex-wrap: wrap;
 }
+.mb-topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .mb-topbar h1 { font-size: 18px; margin: 0; letter-spacing: 0.5px; }
 .mb-topbar-right { display: flex; align-items: center; gap: 12px; }
 .mb-sweep { color: var(--mb-muted); font-size: 12px; }
+
+/* Parent-app home link: pin colors so :visited stays readable on dark UI */
+a.mb-home,
+a.mb-home:link,
+a.mb-home:visited,
+a.mb-home:active {
+  background: var(--mb-accent);
+  color: #0b0d12;
+  border-color: var(--mb-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+a.mb-home:hover,
+a.mb-home:focus-visible {
+  filter: brightness(1.1);
+  color: #0b0d12;
+  text-decoration: none;
+}
 
 main { padding: 20px; max-width: 1100px; margin: 0 auto; }
 

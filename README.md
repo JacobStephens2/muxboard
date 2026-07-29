@@ -80,6 +80,8 @@ board = Muxboard(
         allowed_users=frozenset({"deploy"}),
     ),
     allowed_origins=["https://ops.example.com"],
+    home_url="/",                 # back link in the muxboard top bar
+    home_label="Dashboard",
 )
 board.init_app(app, url_prefix="/console")
 ```

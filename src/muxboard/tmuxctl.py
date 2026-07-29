@@ -30,11 +30,13 @@ from .inventory import Host, index_by_key
 
 log = logging.getLogger("muxboard.tmuxctl")
 
-# Field separator for `tmux ls -F`. ASCII US (Unit Separator, 0x1F) never
-# appears in a legitimate session name - tmux forbids only `.` and `:`, but
-# allows `|`, spaces, etc. - so splitting on it is unambiguous.
-# Order: name <US> windows <US> created <US> attached <US> activity <US> id
-_SEP = "\x1f"
+# Field separator for `tmux ls -F`. Must be printable: tmux 3.4+ escapes
+# non-printable bytes in format output as octal (so a raw US 0x1F becomes the
+# four characters "\037" and parsing silently fails). Session names cannot
+# contain `.` or `:`, so a double-colon is unambiguous across every field we
+# emit (name, ints, `$id`, and the user prefix we prepend).
+# Order: name <SEP> windows <SEP> created <SEP> attached <SEP> activity <SEP> id
+_SEP = "::"
 _FMT = (
     "#{session_name}" + _SEP +
     "#{session_windows}" + _SEP +

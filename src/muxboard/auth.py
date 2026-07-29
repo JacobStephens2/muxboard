@@ -9,13 +9,23 @@ An ``authorize`` callable takes the Flask :class:`~flask.Request` and returns
 either a :class:`Principal` (allow) or ``None`` (deny). It runs on every
 HTTP request and every WebSocket handshake.
 
-Three building blocks ship in the box:
+Building blocks that ship in the box:
 
 - :func:`deny_all` - the safe default; denies everything. Useful as a
   placeholder while you wire up real auth.
 - :func:`token_auth` - a shared-secret gate (header or query param), compared
   in constant time. Adequate behind TLS for a single operator or a small
   trusted team; it is a *bearer* secret, so treat it like a password.
+  Note: browser ``fetch`` and WebSocket handshakes do **not** automatically
+  carry a query-string token - prefer a cookie session (your own, or
+  :func:`signed_cookie_auth`) for full-browser use.
+- :func:`signed_cookie_auth` - trust an existing itsdangerous-signed cookie
+  (the pattern used when muxboard is reverse-proxied under an app that
+  already logs people in). Same-host path mounts keep the cookie host-scoped;
+  no cookie-domain expansion required.
+- :func:`header_auth` - trust a request header set by a front proxy after it
+  has authenticated the caller (``X-Remote-User``, etc.). Only safe when the
+  proxy strips client-supplied values of that header.
 - :func:`allow_all` - opens the board to anyone who can reach it. Only sane
   behind another authenticating layer (an SSO proxy, an mTLS frontend, a
   localhost bind). It logs a loud warning on every construction.
@@ -31,7 +41,7 @@ from __future__ import annotations
 import hmac
 import logging
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from flask import Request
 
@@ -140,5 +150,96 @@ def token_auth(
                 create_users=create_users,
             )
         return None
+
+    return _authorize
+
+
+def signed_cookie_auth(
+    secret: str,
+    *,
+    cookie: str = "session",
+    salt: str = "muxboard-session",
+    max_age: int = 60 * 60 * 24 * 30,
+    name: str = "cookie-user",
+    name_claim: Optional[str] = None,
+    allowed_users: Optional[frozenset[str]] = None,
+    create_users: Optional[frozenset[str]] = None,
+) -> Authorizer:
+    """Trust an itsdangerous-signed cookie issued by another app on this host.
+
+    This is the building block for "muxboard lives under
+    ``https://ops.example.com/console/`` and reuses the ops app's login." The
+    front app issues a signed cookie; muxboard validates the same
+    ``secret`` + ``salt`` + ``max_age``. Mount muxboard on a same-host path so
+    the cookie stays host-scoped (do not widen ``Domain=`` unless you mean to).
+
+    Compatible with :class:`itsdangerous.URLSafeTimedSerializer` payloads.
+    If ``name_claim`` is set and the payload is a mapping, that key is used as
+    :attr:`Principal.name`; otherwise ``name`` is used.
+
+    Requires the ``itsdangerous`` package (already pulled in by Flask).
+    """
+    if not secret or len(secret) < 16:
+        raise ValueError(
+            "signed_cookie_auth secret must be at least 16 characters - it is "
+            "the signing key of an existing session cookie"
+        )
+    try:
+        from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    except ImportError as exc:  # pragma: no cover - Flask always depends on it
+        raise RuntimeError(
+            "signed_cookie_auth requires itsdangerous (install Flask)"
+        ) from exc
+
+    signer = URLSafeTimedSerializer(secret, salt=salt)
+
+    def _authorize(request: Request) -> Optional[Principal]:
+        token = request.cookies.get(cookie)
+        if not token:
+            return None
+        try:
+            payload: Any = signer.loads(token, max_age=max_age)
+        except (BadSignature, SignatureExpired):
+            return None
+        principal_name = name
+        if name_claim and isinstance(payload, dict):
+            claim = payload.get(name_claim)
+            if claim:
+                principal_name = str(claim)
+        return Principal(
+            name=principal_name,
+            allowed_users=allowed_users,
+            create_users=create_users,
+        )
+
+    return _authorize
+
+
+def header_auth(
+    header: str = "X-Remote-User",
+    *,
+    allowed_users: Optional[frozenset[str]] = None,
+    create_users: Optional[frozenset[str]] = None,
+) -> Authorizer:
+    """Trust a header set by a reverse proxy after it authenticated the caller.
+
+    Only safe when the proxy **strips** any client-supplied value of ``header``
+    before setting its own. If a client can reach muxboard directly and forge
+    the header, they get shell access. Bind muxboard to localhost and put the
+    proxy in front.
+
+    The header value becomes :attr:`Principal.name`.
+    """
+    header_key = header
+
+    def _authorize(request: Request) -> Optional[Principal]:
+        value = (request.headers.get(header_key) or "").strip()
+        if not value:
+            return None
+        return Principal(
+            name=value,
+            allowed_users=allowed_users,
+            create_users=create_users,
+        )
 
     return _authorize

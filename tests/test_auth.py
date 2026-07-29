@@ -1,11 +1,22 @@
 import pytest
+from itsdangerous import URLSafeTimedSerializer
 from werkzeug.test import EnvironBuilder
 
-from muxboard.auth import Principal, allow_all, deny_all, token_auth
+from muxboard.auth import (
+    Principal,
+    allow_all,
+    deny_all,
+    header_auth,
+    signed_cookie_auth,
+    token_auth,
+)
 
 
-def _req(headers=None, query=""):
-    builder = EnvironBuilder(headers=headers or {}, query_string=query)
+def _req(headers=None, query="", cookies=None):
+    hdrs = dict(headers or {})
+    if cookies:
+        hdrs["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    builder = EnvironBuilder(headers=hdrs, query_string=query)
     return builder.get_request()
 
 
@@ -73,3 +84,56 @@ def test_token_auth_create_scope():
     assert p is not None
     assert p.may_use("shared")
     assert not p.may_create("shared")
+    assert p.may_create("alice")
+
+
+def test_signed_cookie_auth_accepts_valid_cookie():
+    secret = "s" * 32
+    salt = "dashboard-session"
+    token = URLSafeTimedSerializer(secret, salt=salt).dumps({"admin": True})
+    auth = signed_cookie_auth(
+        secret,
+        cookie="dash_session",
+        salt=salt,
+        name="jacob",
+        allowed_users=frozenset({"jacob"}),
+    )
+    p = auth(_req(cookies={"dash_session": token}))
+    assert p is not None
+    assert p.name == "jacob"
+    assert p.may_use("jacob")
+    assert not p.may_use("root")
+
+
+def test_signed_cookie_auth_name_claim():
+    secret = "s" * 32
+    token = URLSafeTimedSerializer(secret, salt="s").dumps({"email": "a@b.c"})
+    auth = signed_cookie_auth(
+        secret, cookie="sess", salt="s", name_claim="email", name="fallback",
+    )
+    p = auth(_req(cookies={"sess": token}))
+    assert p is not None
+    assert p.name == "a@b.c"
+
+
+def test_signed_cookie_auth_rejects_bad_or_missing():
+    secret = "s" * 32
+    auth = signed_cookie_auth(secret, cookie="sess", salt="s")
+    assert auth(_req()) is None
+    assert auth(_req(cookies={"sess": "not-a-real-token"})) is None
+    other = URLSafeTimedSerializer("t" * 32, salt="s").dumps({"admin": True})
+    assert auth(_req(cookies={"sess": other})) is None
+
+
+def test_signed_cookie_rejects_short_secret():
+    with pytest.raises(ValueError):
+        signed_cookie_auth("short")
+
+
+def test_header_auth():
+    auth = header_auth("X-Remote-User", allowed_users=frozenset({"deploy"}))
+    assert auth(_req()) is None
+    p = auth(_req(headers={"X-Remote-User": "alice"}))
+    assert p is not None
+    assert p.name == "alice"
+    assert p.may_use("deploy")

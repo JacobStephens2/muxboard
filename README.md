@@ -17,10 +17,19 @@ It exists because the alternative - SSH into each box, remember which `tmux` soc
 
 ## Install
 
+muxboard is a library you embed in a Flask app, so install it into that app's virtual environment - not into the system Python. On Debian/Ubuntu (PEP 668), bare `pip install` against the distro Python fails with `externally-managed-environment`; that is intentional. Do not pass `--break-system-packages`.
+
 ```bash
-pip install muxboard          # not yet on PyPI; for now:
-pip install "muxboard @ git+https://github.com/JacobStephens2/muxboard"
+# once per machine on Debian/Ubuntu, if `python3 -m venv` is missing:
+#   sudo apt install python3-venv python3-full
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install "muxboard[deploy] @ git+https://github.com/JacobStephens2/muxboard"
+# not yet on PyPI; when it is: pip install "muxboard[deploy]"
+# bare `muxboard` omits gunicorn/gevent; the [deploy] extra pulls both
 ```
+
+If you already have a project venv, activate it and run only the `pip install` line.
 
 You also need, on the machine muxboard runs on: an SSH client (for remote hosts), `sshpass` (only if you use password auth), and `tmux` on every managed host.
 
@@ -49,7 +58,42 @@ export MUXBOARD_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(
 gunicorn -k gevent -w 1 -b 127.0.0.1:8000 app:app
 ```
 
-`flask-sock` needs a worker that can hold a WebSocket open for the lifetime of an attach. Use a single gevent (or eventlet) worker, not the default sync worker, and put it behind a TLS-terminating reverse proxy. See `examples/single_host.py` and `examples/fleet.py`.
+`flask-sock` needs a worker that can hold a WebSocket open for the lifetime of an attach. Use a single gevent (or eventlet) worker - the `[deploy]` extra installs `gunicorn` and `gevent>=24.10.1` - not the default sync worker. Put it behind a TLS-terminating reverse proxy. See `examples/single_host.py` and `examples/fleet.py`.
+
+## Deploy behind an existing login (recommended for ops boxes)
+
+If you already have a dashboard with passkey/password/SSO, **do not stand up a second hostname and a second password.** Mount muxboard on a same-host path and reuse the session cookie:
+
+```python
+from muxboard import Host, Muxboard, signed_cookie_auth
+
+board = Muxboard(
+    hosts=[Host(key="local", hostname="localhost",
+                tmux_users=("deploy",), local=True)],
+    authorize=signed_cookie_auth(
+        os.environ["SESSION_SECRET"],   # same secret the front app signs with
+        cookie="dash_session",
+        salt="dashboard-session",       # same itsdangerous salt
+        name="ops",
+        allowed_users=frozenset({"deploy"}),
+    ),
+    allowed_origins=["https://ops.example.com"],
+)
+board.init_app(app, url_prefix="/console")
+```
+
+Then reverse-proxy `/console/` (with WebSocket upgrade) to a localhost gunicorn. Full checklist, Apache snippet, and systemd unit: **`examples/deploy/`**. Runnable app: **`examples/behind_existing_login.py`**.
+
+Why this shape:
+
+| Choice | Reason |
+| --- | --- |
+| Same-host path (`/console/`) | Session cookie stays host-scoped; no `Domain=.example.com` expansion |
+| `signed_cookie_auth` | Browser `fetch` and WebSocket handshakes send cookies; query-string `token_auth` does not |
+| `PrivateTmp=false` in systemd when `local=True` | Otherwise the service cannot see `/tmp/tmux-*` sockets from login shells |
+| One gevent worker | Attach holds a long-lived WS; multi-worker sync is wrong |
+
+Auth gates at a glance: `token_auth` (scripts), `signed_cookie_auth` (reuse an app login), `header_auth` (SSO proxy that sets `X-Remote-User` after stripping client values), `allow_all` (only behind a gate you fully trust), or a custom `authorize`.
 
 ## Quickstart - a fleet
 
@@ -97,7 +141,9 @@ A principal who passes your `authorize` gate can run arbitrary commands as any o
 | Gate | When it is appropriate | What it is not |
 | :-- | :-- | :-- |
 | `deny_all` | The default. A board you have not finished configuring is inert. | Not a real gate. |
-| `token_auth(secret)` | A single operator or a small trusted team, behind TLS. Constant-time compared; the secret is a bearer credential - treat it like a password, rotate it, never put it in a query string you would not put a password in. | Not per-user. Anyone with the token is every principal. |
+| `token_auth(secret)` | Scripts/curl, or a single operator behind TLS. Constant-time compared; the secret is a bearer credential. Query-string tokens land in access logs and are not sent by browser `fetch`/WebSocket. | Not a full browser session; not per-user. |
+| `signed_cookie_auth(secret, ...)` | Reuse a login your ops app already issues (itsdangerous cookie). Preferred for "muxboard under `/console/` on the same host." | Not a login UI - the front app still signs people in. |
+| `header_auth("X-Remote-User")` | SSO proxy sets the header after stripping client-supplied values; muxboard bound to localhost. | Not safe if clients can reach muxboard and forge the header. |
 | `allow_all()` | Only when a layer *in front* of muxboard already authenticated the caller - an SSO reverse proxy, mTLS, or a strict `127.0.0.1` bind. It logs a warning on every construction. | Never safe facing the open internet. |
 
 For anything multi-user, write your own `authorize` that reads your existing session or SSO and returns a `Principal` whose `allowed_users` scopes which tmux users that person may touch. `examples/fleet.py` shows the pattern. A scoped principal's dashboard, JSON API, attach page, and WebSocket are all filtered to their `allowed_users`; an out-of-scope user returns 403, not 404, because hiding the existence of the user buys nothing once you are authenticated.
@@ -143,6 +189,8 @@ If you run muxboard under systemd with `PrivateTmp=true` and use a `local=True` 
 ## Development
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ruff check src tests
 pytest -q

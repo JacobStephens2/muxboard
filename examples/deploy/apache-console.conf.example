@@ -1,0 +1,25 @@
+# Apache reverse-proxy snippet: mount muxboard under an existing site.
+#
+# Put these directives *before* the catch-all ProxyPass / for the front app.
+# Requires: a2enmod proxy proxy_http proxy_wstunnel rewrite headers ssl
+#
+# Frontend:  https://ops.example.com/console/   (session cookie already set)
+# Backend:   gunicorn -k gevent -w 1 -b 127.0.0.1:3492  (muxboard url_prefix=/console)
+
+# WebSocket upgrade for live attach (flask-sock).
+RewriteEngine On
+RewriteCond %{HTTP:Upgrade} =websocket [NC]
+RewriteRule ^/console/?(.*)$ "ws://127.0.0.1:3492/console/$1" [P,L]
+
+# Preserve the /console path on the backend (muxboard url_prefix=/console).
+ProxyPass        /console/  http://127.0.0.1:3492/console/
+ProxyPass        /console   http://127.0.0.1:3492/console
+ProxyPassReverse /console/  http://127.0.0.1:3492/console/
+
+# TLS-terminating vhost should advertise https to the app (Secure cookies, etc.).
+# RequestHeader set X-Forwarded-Proto "https"
+# RequestHeader set X-Forwarded-Port  "443"
+
+# Then the existing front app:
+# ProxyPass        /  http://127.0.0.1:3460/
+# ProxyPassReverse /  http://127.0.0.1:3460/

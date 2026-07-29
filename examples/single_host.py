@@ -1,9 +1,10 @@
 """Single-host muxboard: manage tmux on the same machine the app runs on.
 
-The n=1 case. Run:
+The n=1 case. Run from a project venv (Debian/Ubuntu rejects bare system pip):
 
+    python3 -m venv .venv && source .venv/bin/activate
+    pip install "muxboard[deploy] @ git+https://github.com/JacobStephens2/muxboard"
     export MUXBOARD_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-    pip install muxboard gunicorn
     gunicorn -k gevent -w 1 -b 127.0.0.1:8000 single_host:app
 
 Then open http://127.0.0.1:8000/mux/?token=YOUR_TOKEN

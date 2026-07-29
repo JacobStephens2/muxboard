@@ -8,7 +8,7 @@ from muxboard.tmuxctl import (
     valid_new_session_name,
 )
 
-SEP = "\x1f"
+SEP = "::"
 
 
 def _ctrl(*hosts):

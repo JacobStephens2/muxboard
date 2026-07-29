@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "muxboard"
-version = "0.1.1"
+version = "0.1.2"
 description = "Flask-embeddable web dashboard for managing tmux sessions across one host or a fleet, with live in-browser attach."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# gunicorn -k gevent needs both packages; gevent alone is not enough and
+# gunicorn>=26 wants gevent>=24.10.1.
+deploy = ["gunicorn>=22", "gevent>=24.10.1"]
 dev = ["pytest>=7.4", "ruff>=0.4"]
 
 [project.urls]

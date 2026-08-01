@@ -36,7 +36,8 @@ deploy = ["gunicorn>=22", "gevent>=24.10.1"]
 dev = ["pytest>=7.4", "ruff>=0.4"]
 
 [project.urls]
-Homepage = "https://github.com/JacobStephens2/muxboard"
+Homepage = "https://muxboard.dev"
+Documentation = "https://muxboard.dev"
 Source = "https://github.com/JacobStephens2/muxboard"
 Issues = "https://github.com/JacobStephens2/muxboard/issues"
 

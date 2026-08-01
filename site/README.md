@@ -1,13 +1,16 @@
-# Product site (muxboard.stephens.page)
+# Product site (muxboard.dev)
 
 Static marketing page. Source of truth for the **package** install and threat
 model is still the root `README.md` and `examples/deploy/`; this `index.html`
 is the short public face (hero, feature cards, install teaser).
 
+Primary URL: **https://muxboard.dev** (and `www.muxboard.dev`).  
+Legacy: `https://muxboard.stephens.page` → permanent redirect to muxboard.dev.
+
 ## Deploy to the droplet
 
-Docroot is Apache `DocumentRoot /var/www/muxboard.stephens.page`. From a
-checkout of this repo on the host:
+Docroot is Apache `DocumentRoot /var/www/muxboard.stephens.page` (path kept for
+history; both hostnames share it). From a checkout of this repo on the host:
 
 ```bash
 rsync -a --delete \

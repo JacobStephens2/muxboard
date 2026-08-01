@@ -8,7 +8,7 @@ It also exists because the older ops problem - SSH into each box, remember which
 
 **Read the threat model below before you deploy this.** muxboard hands out authenticated remote-shell access over the web. A misconfigured gate is a root shell for a stranger. The defaults are built to fail closed, but the security of your deployment is a property of *your* configuration, not of this README.
 
-Product site (static): **https://muxboard.stephens.page** - source in [`site/`](site/). Deploy with `rsync` to the Apache docroot; see [`site/README.md`](site/README.md).
+Product site (static): **https://muxboard.dev** - source in [`site/`](site/). Deploy with `rsync` to the Apache docroot; see [`site/README.md`](site/README.md). (`muxboard.stephens.page` redirects here.)
 
 ## What you get
 

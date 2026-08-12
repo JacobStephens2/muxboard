@@ -106,3 +106,32 @@ def test_trailing_newline_socket_path_rejected():
     assert not valid_socket_path("/tmp/a.sock\n")
     with pytest.raises(ValueError):
         Host(key="s", hostname="localhost", local=True, tmux_socket="/tmp/a.sock\n")
+
+
+# ---------- explicit session order ----------
+
+
+def test_session_order_defaults_empty():
+    h = Host(key="local", hostname="localhost", tmux_users=("deploy",), local=True)
+    assert h.session_order == ()
+
+
+def test_session_order_accepted():
+    h = Host(key="swarm", hostname="localhost", local=True, tmux_users=("jacob",),
+             session_order=("swarmforge-specifier", "swarmforge-coder"))
+    assert h.session_order[0] == "swarmforge-specifier"
+
+
+def test_empty_session_order_entry_rejected():
+    with pytest.raises(ValueError):
+        Host(key="s", hostname="localhost", local=True, session_order=("a", ""))
+
+
+def test_overlong_session_order_entry_rejected():
+    with pytest.raises(ValueError):
+        Host(key="s", hostname="localhost", local=True, session_order=("a" * 200,))
+
+
+def test_duplicate_session_order_entry_rejected():
+    with pytest.raises(ValueError):
+        Host(key="s", hostname="localhost", local=True, session_order=("a", "b", "a"))

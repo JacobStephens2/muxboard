@@ -167,6 +167,32 @@ A file that is missing, empty, or whose first line fails validation puts that us
 
 `examples/custom_socket.py` is this whole section as a runnable file.
 
+## Session order
+
+Sessions sort numerically-aware by default, which is right for the operator-style names muxboard was built around: `1`, `2`, `3`, `22` land in that order instead of `1, 22, 3`.
+
+It is wrong for a **pipeline**. Sessions named after stages - `specifier`, `coder`, `cleaner` - have a meaningful order, and it is the order work flows through them. No sort can recover that from the names: `specifier` before `architect` is not alphabetical, not numeric, not length. It is knowledge the tool that minted the names has and muxboard does not, so you tell muxboard directly:
+
+```python
+Host(key="swarm", hostname="localhost", local=True,
+     tmux_users=("jacob",),
+     tmux_socket_file="/srv/proj/.swarmforge/tmux-socket",
+     session_order=(
+         "swarmforge-specifier",   # entry point, and the only path back to master
+         "swarmforge-coder",
+         "swarmforge-cleaner",
+         "swarmforge-architect",
+         "swarmforge-hardender",
+         "swarmforge-QA",
+     ))
+```
+
+Entries match a session by equality **or prefix**, first entry wins, so `session_order=("build", "deploy")` groups every `build-*` session ahead of every `deploy-*` one without naming them individually. When two entries overlap, list the specific one first - with `("build-final", "build")` both are reachable; swap them and the broad entry absorbs the specific one.
+
+Anything matching no entry sorts after everything that does, still numeric-aware among itself. A host that sets no `session_order` orders exactly as it did before this option existed.
+
+This is presentation only. It changes the order rows are rendered in and nothing else - not scoping, not auth, not which sessions a principal can see.
+
 ---
 
 # Threat model

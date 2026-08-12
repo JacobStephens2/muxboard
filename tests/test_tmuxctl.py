@@ -5,6 +5,8 @@ from muxboard.tmuxctl import (
     TmuxController,
     TmuxctlError,
     _as_user_prefix,
+    _natural_key,
+    _order_key,
     _socket_flag,
     valid_new_session_name,
 )
@@ -291,3 +293,93 @@ def test_attach_argv_uses_socket_from_file(tmp_path):
              tmux_users=(me,), tmux_socket_file=str(sock_file))
     argv, _ = _ctrl(h).attach_argv(h, me, "swarmforge-coder")
     assert "tmux -S /tmp/swarmforge-me/ab12.sock attach -t swarmforge-coder" in argv[2]
+
+
+# ---------- explicit session order ----------
+
+
+def _rows(*names):
+    return "\n".join(
+        SEP.join(["deploy", n, "1", "1700000000", "0", "1700000000", f"${i}"])
+        for i, n in enumerate(names)
+    )
+
+
+SWARM_ORDER = (
+    "swarmforge-specifier",
+    "swarmforge-coder",
+    "swarmforge-cleaner",
+    "swarmforge-architect",
+    "swarmforge-hardender",
+    "swarmforge-QA",
+)
+
+
+def test_order_key_ranks_named_sessions_then_the_rest():
+    order = ("beta", "alpha")
+    assert _order_key("beta", order)[0] == 0
+    assert _order_key("alpha", order)[0] == 1
+    assert _order_key("gamma", order)[0] == 2
+
+
+def test_order_key_falls_through_to_natural_when_unset():
+    assert _order_key("alpha10", ()) == (0, _natural_key("alpha10"))
+
+
+def test_parse_list_output_honours_session_order():
+    text = _rows(
+        "swarmforge-architect", "swarmforge-cleaner", "swarmforge-coder",
+        "swarmforge-hardender", "swarmforge-QA", "swarmforge-specifier",
+    )
+    parsed = TmuxController._parse_list_output(
+        text, host_key="x", session_order=SWARM_ORDER
+    )
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == list(SWARM_ORDER)
+
+
+def test_unnamed_sessions_follow_named_ones_naturally_sorted():
+    text = _rows("build-22", "swarmforge-coder", "build-3", "swarmforge-specifier")
+    parsed = TmuxController._parse_list_output(
+        text, host_key="x", session_order=SWARM_ORDER
+    )
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+        "swarmforge-specifier", "swarmforge-coder", "build-3", "build-22",
+    ]
+
+
+def test_session_order_matches_by_prefix():
+    text = _rows("zulu-1", "alpha-9", "alpha-10")
+    parsed = TmuxController._parse_list_output(
+        text, host_key="x", session_order=("zulu",)
+    )
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+        "zulu-1", "alpha-9", "alpha-10",
+    ]
+
+
+def test_overlapping_prefixes_are_first_entry_wins():
+    text = _rows("build-final", "build-1")
+    parsed = TmuxController._parse_list_output(
+        text, host_key="x", session_order=("build-final", "build")
+    )
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == ["build-final", "build-1"]
+    # Swapped, the broad entry absorbs the specific one and natural order rules.
+    parsed = TmuxController._parse_list_output(
+        text, host_key="x", session_order=("build", "build-final")
+    )
+    assert [s["name"] for s in parsed["sessions"]["deploy"]] == ["build-1", "build-final"]
+
+
+def test_list_host_passes_the_hosts_order_through(monkeypatch):
+    h = Host(key="swarm", hostname="localhost", local=True, tmux_users=("me",),
+             session_order=("swarmforge-specifier",))
+    c = _ctrl(h)
+    seen = {}
+
+    def fake_parse(text, *, host_key, session_order=()):
+        seen["order"] = session_order
+        return {"sessions": {}, "errors": {}}
+
+    monkeypatch.setattr(c, "_parse_list_output", fake_parse)
+    c.list_host(h)
+    assert seen["order"] == ("swarmforge-specifier",)

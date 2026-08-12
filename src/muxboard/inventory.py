@@ -33,6 +33,12 @@ _SOCKET_SEGMENT_RE = re.compile(r"[A-Za-z0-9._@%+=,-]{1,255}")
 # configuration mistake, or something worse read out of a file.
 SOCKET_PATH_MAX = 1024
 
+# Ceiling on one `session_order` entry. Session names are a tmux concept and
+# muxboard never interpolates an order entry into a command - the entries are
+# compared against names in Python and nothing else - so the only rule worth
+# enforcing is that an entry is a non-empty string of sane length.
+ORDER_ENTRY_MAX = 128
+
 
 def valid_socket_path(path: str) -> bool:
     """True for an absolute path safe to interpolate as ``tmux -S <path>``.
@@ -95,6 +101,17 @@ class Host:
             file is read as the tmux user, capped at 4 KiB, and its first line
             must satisfy the same validation as ``tmux_socket``. Mutually
             exclusive with ``tmux_socket``.
+        session_order: Session names (or name prefixes) that sort first, in the
+            order given, ahead of everything else. For a host whose sessions are
+            stages of a pipeline - ``specifier``, ``coder``, ``cleaner`` - the
+            meaningful order is the order work flows through them, which no sort
+            derived from the names themselves can recover. Sessions that match
+            no entry follow the named ones, still numeric-aware-sorted among
+            themselves; a host that sets nothing here orders exactly as it did
+            before this option existed. Matching is first-entry-wins on equality
+            or prefix, so list the more specific entry first when two overlap.
+            Presentation only: this never affects scoping, auth, or which
+            sessions a principal can see.
     """
 
     key: str
@@ -108,6 +125,7 @@ class Host:
     local: bool = False
     tmux_socket: str = ""
     tmux_socket_file: str = ""
+    session_order: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         if not _KEY_RE.match(self.key):
@@ -143,6 +161,18 @@ class Host:
                     "[A-Za-z0-9._@%+=,-] segments (no '..', no spaces, no shell "
                     "metacharacters)"
                 )
+        seen: set[str] = set()
+        for entry in self.session_order:
+            if not entry or len(entry) > ORDER_ENTRY_MAX:
+                raise ValueError(
+                    f"host {self.key!r}: session_order entries must be 1-"
+                    f"{ORDER_ENTRY_MAX} chars; got {entry!r}"
+                )
+            if entry in seen:
+                raise ValueError(
+                    f"host {self.key!r}: duplicate session_order entry {entry!r}"
+                )
+            seen.add(entry)
 
     @property
     def display(self) -> str:

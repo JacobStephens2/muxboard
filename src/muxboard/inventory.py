@@ -21,6 +21,37 @@ _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # can never expand into shell syntax even before shlex.quote() runs.
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
+# One path segment of a tmux socket path. Socket paths are interpolated into a
+# shell script that already runs through `sudo -n -u`, and one form of them is
+# read out of a file some other tool wrote, so they get their own whitelist
+# instead of relying on shlex.quote() alone. `:` is excluded deliberately: a
+# resolved path travels back from the host inside a line this package splits
+# on `::` (see _SEP in tmuxctl).
+_SOCKET_SEGMENT_RE = re.compile(r"[A-Za-z0-9._@%+=,-]{1,255}")
+
+# Generous next to PATH_MAX but far below it - a socket path this long is a
+# configuration mistake, or something worse read out of a file.
+SOCKET_PATH_MAX = 1024
+
+
+def valid_socket_path(path: str) -> bool:
+    """True for an absolute path safe to interpolate as ``tmux -S <path>``.
+
+    Requires a leading ``/``, no trailing ``/``, no empty / ``.`` / ``..``
+    segments, and only ``[A-Za-z0-9._@%+=,-]`` inside each segment - no
+    whitespace, quotes, or shell metacharacters of any kind.
+    """
+    if not path or len(path) > SOCKET_PATH_MAX:
+        return False
+    if not path.startswith("/") or path.endswith("/"):
+        return False
+    # fullmatch, not match: re's `$` also matches just before a trailing
+    # newline, which would let "/tmp/a.sock\n" through the whitelist.
+    return all(
+        _SOCKET_SEGMENT_RE.fullmatch(seg) and seg not in (".", "..")
+        for seg in path[1:].split("/")
+    )
+
 
 @dataclass(frozen=True)
 class Host:
@@ -49,6 +80,21 @@ class Host:
             common single-host deployment (muxboard runs on the same box whose
             tmux you manage). See the README note on systemd ``PrivateTmp`` if
             your sockets are invisible under ``local=True``.
+        tmux_socket: Absolute path of a non-default tmux server socket, threaded
+            through every tmux call as ``-S <path>``. Unset means the user's
+            default socket, which is the behaviour of every host that predates
+            this option. A host entry addresses exactly one tmux server, so a
+            machine running both a default server and a private one is two
+            ``Host`` entries with different ``key``s (and a ``label`` to tell
+            them apart). Mutually exclusive with ``tmux_socket_file``.
+        tmux_socket_file: Absolute path of a *file on the host* whose first line
+            is the socket path to use. For tools that mint a socket path at
+            runtime and publish it - swarm-forge writes
+            ``<project>/.swarmforge/tmux-socket`` - this stays correct across
+            restarts without the operator knowing how the name is derived. The
+            file is read as the tmux user, capped at 4 KiB, and its first line
+            must satisfy the same validation as ``tmux_socket``. Mutually
+            exclusive with ``tmux_socket``.
     """
 
     key: str
@@ -60,6 +106,8 @@ class Host:
     password_env: str = ""
     ssh_key: str = ""
     local: bool = False
+    tmux_socket: str = ""
+    tmux_socket_file: str = ""
 
     def __post_init__(self) -> None:
         if not _KEY_RE.match(self.key):
@@ -82,6 +130,19 @@ class Host:
             raise ValueError(
                 f"host {self.key!r}: ssh_user is required unless local=True"
             )
+        if self.tmux_socket and self.tmux_socket_file:
+            raise ValueError(
+                f"host {self.key!r}: set only one of tmux_socket / tmux_socket_file"
+            )
+        for fieldname in ("tmux_socket", "tmux_socket_file"):
+            value = getattr(self, fieldname)
+            if value and not valid_socket_path(value):
+                raise ValueError(
+                    f"host {self.key!r}: {fieldname} {value!r} must be an absolute "
+                    f"path of at most {SOCKET_PATH_MAX} chars, built from "
+                    "[A-Za-z0-9._@%+=,-] segments (no '..', no spaces, no shell "
+                    "metacharacters)"
+                )
 
     @property
     def display(self) -> str:

@@ -14,6 +14,7 @@ Product site (static): **https://muxboard.dev** - source in [`site/`](site/). De
 
 - A dashboard at `/<prefix>/` listing every configured host, each host's managed tmux users, and each user's sessions (window count, created time, last activity, attached flag) - one place to see every long-running AI agent or job.
 - Create a session (optionally with a startup command), kill a session (behind a type-the-name confirm gate), and attach a live terminal in a new tab so you can leave an AI agent overnight and rejoin from a cafe without SSH gymnastics.
+- Non-default tmux sockets: point a host at `tmux -S <path>` and sessions a tool keeps on its own socket (swarm-forge's per-role agents, for one) show up alongside everything else. See [Non-default tmux sockets](#non-default-tmux-sockets).
 - A background sweep that refreshes the inventory every 60 seconds so the dashboard reads from a cache and never blocks on SSH.
 - Numeric-aware session ordering, so operator-style names like `1`, `2`, `3`, `22` render in the order humans expect.
 - A post-create spotlight in the dashboard so the new session is scrolled into view and marked after the page reloads.
@@ -130,6 +131,42 @@ ops ALL=(deploy) NOPASSWD: /usr/bin/tmux
 
 If sudo is refused for a user, muxboard shows that user's row with a "sudo refused" badge rather than a deceptively empty session list. That distinction is deliberate: empty and forbidden are not the same fact.
 
+## Non-default tmux sockets
+
+A tool that runs `tmux -S <path>` is invisible to a host entry that does not name that socket, because `tmux ls` only ever sees the default one. Set `tmux_socket` and every tmux call muxboard makes for that host - list, create, kill, attach - carries `-S <path>`:
+
+```python
+Host(key="swarm", hostname="localhost", local=True,
+     label="localhost (swarm-forge)",
+     tmux_users=("jacob",),
+     tmux_socket="/tmp/swarmforge-jacob/2b1f9c3a.sock")
+```
+
+**A host entry addresses one tmux server, not one machine.** A box running both your interactive tmux and a tool's private server is two `Host` entries with different keys, and `label` is how you tell them apart in the UI. That keeps the routes (`/<key>/<user>/<name>/attach`) collision-free and leaves `allowed_users` scoping unchanged: a private socket owned by `jacob` is no more privilege than `jacob`'s default socket, so `allowed_users={"jacob"}` covers both entries. The cost is one extra SSH hop per sweep for a remote machine you list twice; for `local=True` it is free.
+
+When the tool mints the socket name at runtime, name the file it publishes instead of the path. [swarm-forge](https://github.com/unclebob/swarm-forge) derives its socket from a CRC32 of the working directory and writes the result to `<project>/.swarmforge/tmux-socket`, so this stays correct across restarts without you ever computing that hash:
+
+```python
+Host(key="swarm", hostname="localhost", local=True,
+     label="localhost (swarm-forge)",
+     tmux_users=("jacob",),
+     tmux_socket_file="/srv/proj/.swarmforge/tmux-socket")
+```
+
+`tmux_socket` and `tmux_socket_file` are mutually exclusive, and both must be absolute paths built from `[A-Za-z0-9._@%+=,-]` segments - no `..`, no whitespace, no shell metacharacters. Leave both unset and behaviour is exactly what it was: the user's default socket, no `-S` on any command.
+
+The socket file is read **as the tmux user**, with `sudo -n -u <user>` when that is not the login user, so muxboard never reads a path out of a file that user could not read itself. That means a socket-file host needs `head` in its sudoers rule as well as `tmux`:
+
+```
+ops ALL=(deploy) NOPASSWD: /usr/bin/tmux, /usr/bin/head
+```
+
+Widening the rule that way is a real grant, not a formality - see the threat-model note below before you add it. Only `tmux_socket_file` needs it; a literal `tmux_socket` reads nothing and costs nothing, while a socket-file host spends one extra exec per sweep (and per kill, create, or attach) reading the file before any path can reach a tmux command.
+
+A file that is missing, empty, or whose first line fails validation puts that user's row in the "unreadable" state; a sudo refusal still reads "sudo refused", because those are different facts. Neither ever falls back to the default socket - silently listing the wrong tmux server would be worse than showing nothing.
+
+`examples/custom_socket.py` is this whole section as a runnable file.
+
 ---
 
 # Threat model
@@ -159,6 +196,7 @@ Session creation can be narrower than listing, attaching, and killing. Set `Prin
 ## The attack surface, and what is already mitigated
 
 - **Command injection.** Every session name and startup command coming from a client is passed through `shlex.quote`, and no command on the muxboard side ever runs through a shell (`shell=True` is never used). Session-name *creation* is further restricted to `[A-Za-z0-9_-]{1,64}`. Attach and kill operate on existing names, which tmux itself constrains.
+- **Configurable socket paths (`tmux_socket` / `tmux_socket_file`).** These are new attack surface, and they are treated as such. A path is only usable if it is absolute and made of `[A-Za-z0-9._@%+=,-]` segments with no `..` - shell metacharacters, whitespace, and `:` are rejected outright rather than merely `shlex.quote`-d, and a literal path fails at `Host` construction so a bad config never reaches a live board. `tmux_socket_file` additionally reads content some *other* tool wrote, so that read is capped at 4 KiB, takes the first line only, runs as the tmux user rather than the login user, and is validated against the same whitelist before it can reach a tmux command. What this does **not** defend against: a socket path is a request to talk to whatever tmux server is listening there. Anyone who can write the file you point `tmux_socket_file` at chooses which tmux server your operators attach to. Point it at a file inside a directory only the tmux user can write. And note what the sudoers line that form needs actually grants: `ops ALL=(deploy) NOPASSWD: /usr/bin/head` lets the login user read *any* file `deploy` can read, which is broader than the tmux-only rule everywhere else in this README. If that trade is not worth it, use a literal `tmux_socket` - it needs no sudoers change at all.
 - **Cross-site WebSocket hijacking.** Set `allowed_origins` and the WebSocket handshake rejects any browser `Origin` not on the list. If you leave it unset the check is disabled and muxboard logs a warning - do not ship to production that way. Non-browser clients (which omit `Origin`) are allowed through, which is fine for ops tooling but means the Origin check is a defense for browser victims, not an authentication mechanism.
 - **Accidental destructive POSTs.** A kill requires the client to echo the exact session name in a `confirm` field, so a stray same-site POST (a future XSS, a fat-fingered curl, a malicious extension) cannot silently kill a session.
 - **Create-as attribution drift.** For shared boxes, prefer a narrow `create_users` scope so new sessions are attributed to the operator's own Unix account, not a shared service account. This does not make existing shared sessions read-only; it only gates creation.

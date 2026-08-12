@@ -87,6 +87,33 @@ def _natural_key(name: str) -> list[tuple[int, int, str]]:
     ]
 
 
+def _order_key(
+    name: str, session_order: tuple[str, ...]
+) -> tuple[int, list[tuple[int, int, str]]]:
+    """Sort key honouring a host's explicit ``session_order``.
+
+    The rank is the index of the first entry in ``session_order`` that equals
+    ``name`` or is a prefix of it; a name matching no entry ranks after every
+    named one. Ties - including every name on a host that configures no order -
+    fall through to :func:`_natural_key`, so an unconfigured host sorts exactly
+    as it always has.
+
+    First-entry-wins is what makes an overlapping order predictable: with
+    ``("build-final", "build")`` the specific entry is reachable, and with the
+    two swapped ``build-final`` is absorbed by the prefix. Documented rather
+    than resolved by longest-match, because the operator wrote the order down
+    and reading it top to bottom should be the whole rule.
+    """
+    if not session_order:
+        return (0, _natural_key(name))
+    rank = len(session_order)
+    for i, entry in enumerate(session_order):
+        if name.startswith(entry):
+            rank = i
+            break
+    return (rank, _natural_key(name))
+
+
 def _as_user_prefix(target_user: str, login_user: str) -> str:
     """Shell prefix that elevates from login_user to target_user.
 
@@ -370,7 +397,9 @@ class TmuxController:
         return "; ".join(parts)
 
     @staticmethod
-    def _parse_list_output(text: str, *, host_key: str) -> dict[str, Any]:
+    def _parse_list_output(
+        text: str, *, host_key: str, session_order: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
         sessions_by_user: dict[str, list[dict[str, Any]]] = {}
         errors: dict[str, str] = {}
         err_prefix = "__MUXBOARD_ERR__" + _SEP
@@ -402,7 +431,7 @@ class TmuxController:
                 continue
             sessions_by_user.setdefault(user, []).append(entry)
         for sessions in sessions_by_user.values():
-            sessions.sort(key=lambda e: _natural_key(e["name"]))
+            sessions.sort(key=lambda e: _order_key(e["name"], session_order))
         return {"sessions": sessions_by_user, "errors": errors}
 
     def list_host(self, host: Host) -> dict[str, Any]:
@@ -439,7 +468,9 @@ class TmuxController:
         if r.returncode != 0 and not r.stdout.strip():
             tail = (r.stderr.strip().splitlines() or ["unknown"])[-1]
             return self._list_fail(host, f"exit {r.returncode}: {tail}", start)
-        parsed = self._parse_list_output(r.stdout, host_key=host.key)
+        parsed = self._parse_list_output(
+            r.stdout, host_key=host.key, session_order=tuple(host.session_order)
+        )
         return {
             "ok": True, "error": None,
             "sessions": parsed["sessions"],

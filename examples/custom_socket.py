@@ -50,6 +50,19 @@ board = Muxboard(
             # not. Use tmux_socket="/tmp/.../abc123.sock" instead when the path
             # is fixed and you know it. The two are mutually exclusive.
             tmux_socket_file=f"{PROJECT}/.swarmforge/tmux-socket",
+            # Alphabetical is wrong for a pipeline: the specifier is the entry
+            # point and the only path back to master, and it sorts last. Spell
+            # the pipeline order out - it is knowledge swarm-forge has and
+            # muxboard cannot derive from the names. Sessions matching nothing
+            # here follow these, numeric-aware-sorted among themselves.
+            session_order=(
+                "swarmforge-specifier",
+                "swarmforge-coder",
+                "swarmforge-cleaner",
+                "swarmforge-architect",
+                "swarmforge-hardender",
+                "swarmforge-QA",
+            ),
         ),
     ],
     authorize=token_auth(os.environ["MUXBOARD_TOKEN"]),

@@ -50,6 +50,19 @@ log = logging.getLogger("muxboard")
 _XTERM_JS = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"
 _XTERM_CSS = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
 _XTERM_FIT = "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"
+_XTERM_WEBLINKS = (
+    "https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"
+)
+_XTERM_CLIPBOARD = (
+    "https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.1.0/lib/addon-clipboard.min.js"
+)
+
+OSC52_OFF = "off"
+OSC52_WRITE = "write"
+OSC52_READ_WRITE = "read-write"
+OSC52_MODES = frozenset({OSC52_OFF, OSC52_WRITE, OSC52_READ_WRITE})
+# Clipboard push cap: a login URL fits; a dumped secret file does not.
+OSC52_PUSH_MAX_BYTES = 64 * 1024
 
 # Audit hook signature: (event_name, **fields) -> None.
 AuditHook = Callable[..., None]
@@ -75,9 +88,12 @@ class Muxboard:
         audit: Optional[AuditHook] = None,
         home_url: Optional[str] = None,
         home_label: str = "Dashboard",
+        osc52: str = OSC52_OFF,
         xterm_js_url: str = _XTERM_JS,
         xterm_css_url: str = _XTERM_CSS,
         xterm_fit_url: str = _XTERM_FIT,
+        xterm_weblinks_url: str = _XTERM_WEBLINKS,
+        xterm_clipboard_url: str = _XTERM_CLIPBOARD,
     ) -> None:
         """Construct a board.
 
@@ -97,7 +113,14 @@ class Muxboard:
                 parent app" link in the top bar (e.g. ``"/"`` when mounted
                 under ``/console/`` on an ops dashboard). ``None`` hides it.
             home_label: Link text for ``home_url`` (default ``"Dashboard"``).
+            osc52: Session clipboard via OSC 52. ``"off"`` (default) ignores
+                it. ``"write"`` is clipboard push only. ``"read-write"`` is
+                push plus clipboard query (query always prompts).
         """
+        mode = (osc52 or "").strip()
+        if mode not in OSC52_MODES:
+            allowed = ", ".join(sorted(OSC52_MODES))
+            raise ValueError(f"osc52 must be one of {allowed}; got {osc52!r}")
         self.controller = TmuxController(
             hosts,
             ssh_key=ssh_key,
@@ -115,8 +138,13 @@ class Muxboard:
         self.audit = audit or _noop_audit
         self.home_url = home_url
         self.home_label = home_label
+        self.osc52 = mode
         self.xterm = {
-            "js": xterm_js_url, "css": xterm_css_url, "fit": xterm_fit_url,
+            "js": xterm_js_url,
+            "css": xterm_css_url,
+            "fit": xterm_fit_url,
+            "weblinks": xterm_weblinks_url,
+            "clipboard": xterm_clipboard_url,
         }
         self._url_prefix = "/muxboard"
         if self.allowed_origins is None:
@@ -285,6 +313,8 @@ class Muxboard:
                 xterm=self.xterm,
                 home_url=self.home_url,
                 home_label=self.home_label,
+                osc52=self.osc52,
+                osc52_push_max=OSC52_PUSH_MAX_BYTES,
             )
 
     def _guard_mutation(self, key: str, user: str) -> tuple[Principal, Host]:

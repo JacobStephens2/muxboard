@@ -141,10 +141,13 @@ def test_attach_page_has_copy_control():
     assert 'data-mb-osc52="off"' in html
 
 
-def test_attach_page_loads_web_links_addon():
+def test_attach_page_loads_wrap_url_helper():
     r = _attach()
     assert r.status_code == 200
-    assert b"addon-web-links" in r.data
+    assert b"wrap-url.js" in r.data
+    assert b"registerLinkProvider" in r.data
+    assert b"mbWrapUrl.copyText" in r.data
+    assert b"addon-web-links" not in r.data
 
 
 def test_attach_omits_clipboard_addon_when_osc52_off():

@@ -7,7 +7,9 @@
   <link rel="stylesheet" href="{{ xterm.css }}">
   <link rel="stylesheet" href="{{ url_for('muxboard.static', filename='muxboard/muxboard.css') }}">
 </head>
-<body class="mb-attach-page">
+<body class="mb-attach-page"
+      data-mb-osc52="{{ osc52 }}"
+      data-mb-osc52-max="{{ osc52_push_max }}">
   <header class="mb-attach-header">
     <a class="mb-btn mb-home mb-btn-sm" href="{{ base }}/">← Muxboard</a>
     {% if home_url %}
@@ -18,12 +20,27 @@
       <span>·</span>
       <code>{{ session_name }}</code>
     </span>
+    <button type="button" class="mb-btn mb-btn-sm" data-mb-copy disabled title="nothing selected">Copy</button>
     <span class="mb-attach-status" data-state="connecting" id="mb-status">connecting...</span>
   </header>
   <div id="mb-terminal" aria-label="Terminal output"></div>
+  {% if osc52 == "read-write" %}
+  <dialog data-mb-clip-query class="mb-dialog">
+    <h3>Clipboard query</h3>
+    <p>This Session wants to read the clipboard.</p>
+    <div class="mb-dialog-actions">
+      <button type="button" class="mb-btn" data-mb-clip-deny>Deny</button>
+      <button type="button" class="mb-btn mb-home" data-mb-clip-allow>Allow</button>
+    </div>
+  </dialog>
+  {% endif %}
 
   <script src="{{ xterm.js }}"></script>
   <script src="{{ xterm.fit }}"></script>
+  <script src="{{ xterm.weblinks }}"></script>
+  {% if osc52 != "off" %}
+  <script src="{{ xterm.clipboard }}"></script>
+  {% endif %}
   <script>
   (function () {
     'use strict';
@@ -32,13 +49,27 @@
     var HOST_KEY = {{ host_key | tojson }};
     var TMUX_USER = {{ tmux_user | tojson }};
     var SESSION_NAME = {{ session_name | tojson }};
+    var OSC52 = document.body.getAttribute('data-mb-osc52') || 'off';
+    var OSC52_MAX = parseInt(document.body.getAttribute('data-mb-osc52-max') || '0', 10);
 
     var statusEl = document.getElementById('mb-status');
     var termEl = document.getElementById('mb-terminal');
+    var copyBtn = document.querySelector('[data-mb-copy]');
+    var statusRestore = null;
+    var copiedTimer = null;
 
     function setStatus(state, msg) {
       statusEl.dataset.state = state;
       statusEl.textContent = msg;
+    }
+
+    function flashStatus(msg) {
+      if (statusRestore) clearTimeout(statusRestore);
+      setStatus(statusEl.dataset.state, msg);
+      statusRestore = setTimeout(function () {
+        statusRestore = null;
+        if (connected) setStatus('open', 'connected');
+      }, 2500);
     }
 
     var term = new window.Terminal({
@@ -51,8 +82,150 @@
     });
     var fitAddon = new window.FitAddon.FitAddon();
     term.loadAddon(fitAddon);
+
+    function isMac() {
+      return /Mac|iPhone|iPad/.test(navigator.platform || '');
+    }
+
+    function modifierHeld(ev) {
+      return isMac() ? !!(ev && ev.metaKey) : !!(ev && ev.ctrlKey);
+    }
+
+    function openLink(ev, uri) {
+      if (!modifierHeld(ev)) return;
+      var url;
+      try { url = new URL(uri); } catch (e) { return; }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+      window.open(url.href, '_blank', 'noopener,noreferrer');
+    }
+
+    function setLinkTitle(text) { termEl.title = text || ''; }
+
+    var webLinks = new window.WebLinksAddon.WebLinksAddon(openLink, {
+      hover: function (_ev, text) { setLinkTitle(text); },
+      leave: function () { setLinkTitle(''); },
+    });
+    term.loadAddon(webLinks);
+    term.options.linkHandler = {
+      activate: openLink,
+      hover: function (_ev, text) { setLinkTitle(text); },
+      leave: function () { setLinkTitle(''); },
+      allowNonHttpProtocols: false,
+    };
+
     term.open(termEl);
     fitAddon.fit();
+
+    function syncCopyBtn() {
+      if (!copyBtn) return;
+      var has = term.hasSelection();
+      copyBtn.disabled = !has;
+      copyBtn.title = has ? '' : 'nothing selected';
+      if (copiedTimer) return;
+      copyBtn.textContent = 'Copy';
+    }
+
+    function doCopy() {
+      var text = term.getSelection();
+      if (!text) return;
+      function ok() {
+        if (!copyBtn) return;
+        copyBtn.textContent = 'Copied';
+        copyBtn.disabled = !term.hasSelection();
+        if (copiedTimer) clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(function () {
+          copiedTimer = null;
+          syncCopyBtn();
+        }, 1500);
+      }
+      function fail() { flashStatus('copy failed'); }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(ok).catch(fail);
+      } else {
+        fail();
+      }
+    }
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        doCopy();
+        term.focus();
+      });
+    }
+    term.onSelectionChange(syncCopyBtn);
+
+    term.attachCustomKeyEventHandler(function (ev) {
+      if (ev.type !== 'keydown') return true;
+      var chord = (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey &&
+                  (ev.key === 'c' || ev.key === 'C');
+      if (chord && term.hasSelection()) {
+        ev.preventDefault();
+        doCopy();
+        return false;
+      }
+      return true;
+    });
+
+    function utf8Bytes(s) {
+      try { return new TextEncoder().encode(s || '').length; }
+      catch (e) { return (s || '').length; }
+    }
+
+    function promptClipQuery() {
+      var dlg = document.querySelector('[data-mb-clip-query]');
+      if (!dlg || typeof dlg.showModal !== 'function') return Promise.resolve(false);
+      return new Promise(function (resolve) {
+        var settled = false;
+        function done(ok) {
+          if (settled) return;
+          settled = true;
+          allow.removeEventListener('click', onAllow);
+          deny.removeEventListener('click', onDeny);
+          dlg.removeEventListener('close', onClose);
+          if (dlg.open) dlg.close();
+          resolve(ok);
+        }
+        function onAllow(ev) { ev.preventDefault(); done(true); }
+        function onDeny(ev) { ev.preventDefault(); done(false); }
+        function onClose() { done(false); }
+        var allow = dlg.querySelector('[data-mb-clip-allow]');
+        var deny = dlg.querySelector('[data-mb-clip-deny]');
+        allow.addEventListener('click', onAllow);
+        deny.addEventListener('click', onDeny);
+        dlg.addEventListener('close', onClose);
+        dlg.showModal();
+      });
+    }
+
+    if (OSC52 !== 'off' && window.ClipboardAddon) {
+      var provider = {
+        readText: function (sel) {
+          // Reject (do not resolve '') so ClipboardAddon does not inject an
+          // empty OSC 52 reply into the Session. Deny means no read.
+          if (OSC52 !== 'read-write' || sel !== 'c') {
+            return Promise.reject(new Error('clipboard query disabled'));
+          }
+          return promptClipQuery().then(function (ok) {
+            if (!ok) return Promise.reject(new Error('clipboard query denied'));
+            return navigator.clipboard.readText();
+          });
+        },
+        writeText: function (sel, text) {
+          if (sel !== 'c') return Promise.resolve();
+          var n = utf8Bytes(text);
+          if (n > OSC52_MAX) {
+            flashStatus('clipboard: refused (' + n + ' B > 64 KiB)');
+            return Promise.resolve();
+          }
+          return navigator.clipboard.writeText(text).then(function () {
+            flashStatus('clipboard: ' + n + ' B from session');
+          }).catch(function () {
+            flashStatus('clipboard: write failed');
+          });
+        },
+      };
+      term.loadAddon(new window.ClipboardAddon.ClipboardAddon(undefined, provider));
+    }
 
     var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var wsUrl = wsProto + '//' + window.location.host + BASE +

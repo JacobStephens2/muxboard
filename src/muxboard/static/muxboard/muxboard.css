@@ -36,7 +36,8 @@ body.muxboard code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
 a.mb-home,
 a.mb-home:link,
 a.mb-home:visited,
-a.mb-home:active {
+a.mb-home:active,
+button.mb-home {
   background: var(--mb-accent);
   color: #0b0d12;
   border-color: var(--mb-accent);
@@ -44,7 +45,9 @@ a.mb-home:active {
   text-decoration: none;
 }
 a.mb-home:hover,
-a.mb-home:focus-visible {
+a.mb-home:focus-visible,
+button.mb-home:hover,
+button.mb-home:focus-visible {
   filter: brightness(1.1);
   color: #0b0d12;
   text-decoration: none;
@@ -118,6 +121,7 @@ body.mb-attach-page { margin: 0; background: #0b0b0b; color: #ddd; height: 100vh
 }
 .mb-attach-header code { font-family: ui-monospace, Menlo, Consolas, monospace; color: #a9d1ff; }
 .mb-attach-meta { display: flex; align-items: center; gap: 6px; color: var(--mb-muted); min-width: 0; }
+.mb-attach-header [data-mb-copy] { flex: 0 0 auto; }
 .mb-attach-status { margin-left: auto; font-size: 12px; }
 /* Non-accent header buttons: keep :visited readable on dark attach chrome */
 .mb-attach-header a.mb-btn:not(.mb-home),

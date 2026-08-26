@@ -19,6 +19,9 @@ Product site (static): **https://muxboard.dev** - source in [`site/`](site/). De
 - Numeric-aware session ordering, so operator-style names like `1`, `2`, `3`, `22` render in the order humans expect.
 - A post-create spotlight in the dashboard so the new session is scrolled into view and marked after the page reloads.
 - Per-principal and global caps on concurrent attaches, so one account cannot exhaust file descriptors, PIDs, or RAM.
+- Attach Copy: the current selection onto the system clipboard (header button, or Ctrl/Cmd+C when a selection exists). Ctrl+C with no selection is still SIGINT.
+- **Links** in Attach (regex URLs and OSC 8): Ctrl+click, Cmd+click on macOS, new tab with `noopener,noreferrer`. Plain drag still selects.
+- Optional OSC 52 (`osc52="off"|"write"|"read-write"`, default `"off"`). Write is a noticed, 64 KiB-capped clipboard push from the session. Read-write adds a clipboard query that always prompts Allow/Deny. See [ADR 0001](docs/adr/0001-osc52-off-by-default.md) and [ADR 0002](docs/adr/0002-modifier-click-links.md).
 
 ## Install
 
@@ -228,6 +231,8 @@ Session creation can be narrower than listing, attaching, and killing. Set `Prin
 - **Create-as attribution drift.** For shared boxes, prefer a narrow `create_users` scope so new sessions are attributed to the operator's own Unix account, not a shared service account. This does not make existing shared sessions read-only; it only gates creation.
 - **Resource exhaustion.** Concurrent attaches are capped per principal (default 5) and globally (default 30). Each attach has a 6-hour hard lifetime and a 4 MiB output-queue ceiling, after which the bridge tears down the whole SSH/tmux process group - no leaked fds, no zombies.
 - **The authorize callable itself throwing.** If your `authorize` raises, muxboard logs it and denies. Failure is closed.
+- **OSC 52 clipboard.** Off by default. A session that can print to the pane can otherwise stuff or (with read-write) read the operator clipboard. `osc52="write"` allows clipboard push only, notices it in the attach status, and refuses payloads over 64 KiB. `osc52="read-write"` adds clipboard query, which always shows Allow/Deny so the read is a user gesture. Do not turn this on for a board whose sessions you do not trust as much as the operator's clipboard.
+- **Attach links.** Only `http`/`https`. Opening requires a modifier-click so a drag-select of a login URL still works. `window.open(..., 'noopener,noreferrer')` so the new tab cannot rewrite `window.opener`.
 
 ## What muxboard does *not* do, and you must
 
@@ -238,10 +243,10 @@ Session creation can be narrower than listing, attaching, and killing. Set `Prin
 
 ## The supply-chain question: xterm.js
 
-The attach page loads xterm.js and its fit addon. By default it pulls pinned versions (`@xterm/xterm@5.5.0`, `@xterm/addon-fit@0.10.0`) from jsDelivr. That is a third-party script running on a page that grants shell access - a real supply-chain surface. Two ways to close it, in increasing order of paranoia:
+The attach page loads xterm.js plus the fit addon, the Link addon (`@xterm/addon-web-links`), and (when `osc52` is not `"off"`) the clipboard addon. By default it pulls pinned versions (`@xterm/xterm@5.5.0`, `@xterm/addon-fit@0.10.0`, `@xterm/addon-web-links@0.11.0`, `@xterm/addon-clipboard@0.1.0`) from jsDelivr. That is a third-party script running on a page that grants shell access - a real supply-chain surface. Two ways to close it, in increasing order of paranoia:
 
-1. Add Subresource Integrity. Pass your own `xterm_js_url` / `xterm_css_url` / `xterm_fit_url` pointing at URLs you have pinned with SRI hashes in your own template, or front the CDN with a CSP that pins hashes.
-2. Self-host. Copy the three assets into your own static directory and point the `*_url` kwargs at them. Then no external origin is in the trust path at all.
+1. Add Subresource Integrity. Pass your own `xterm_js_url` / `xterm_css_url` / `xterm_fit_url` / `xterm_weblinks_url` / `xterm_clipboard_url` pointing at URLs you have pinned with SRI hashes in your own template, or front the CDN with a CSP that pins hashes.
+2. Self-host. Copy the assets into your own static directory and point the `*_url` kwargs at them. Then no external origin is in the trust path at all.
 
 I have not shipped SRI hashes baked into the template because a wrong hash silently breaks the terminal and a right-but-stale hash rots on the next xterm release; pushing that decision to the deployer who controls their own CSP seemed more honest than pretending the default is hardened. This is the part of the threat model I am least settled on - if you have a cleaner default, open an issue.
 

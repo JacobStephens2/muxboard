@@ -1,14 +1,16 @@
+import pytest
 from flask import Flask
 
 from muxboard import Host, Muxboard, Principal
 
 
-def _app(authorize):
+def _app(authorize, **kwargs):
     board = Muxboard(
         hosts=[Host(key="local", hostname="localhost",
                     tmux_users=("alice", "bob"), local=True)],
         authorize=authorize,
         allowed_origins=["http://localhost"],
+        **kwargs,
     )
     app = Flask(__name__)
     app.testing = True
@@ -106,3 +108,68 @@ def test_kill_requires_confirm_echo():
     r = client.post("/mux/api/local/alice/kill", data={"name": "sess", "confirm": "wrong"})
     assert r.status_code == 400
     assert r.get_json()["ok"] is False
+
+
+def test_osc52_defaults_off():
+    _, board = _app(lambda r: Principal(name="admin"))
+    assert board.osc52 == "off"
+
+
+def test_osc52_rejects_unknown_value():
+    with pytest.raises(ValueError, match="osc52"):
+        _app(lambda r: Principal(name="admin"), osc52="on")
+
+
+def test_osc52_accepts_write_and_read_write():
+    _, write_board = _app(lambda r: Principal(name="admin"), osc52="write")
+    _, rw_board = _app(lambda r: Principal(name="admin"), osc52="read-write")
+    assert write_board.osc52 == "write"
+    assert rw_board.osc52 == "read-write"
+
+
+def _attach(osc52="off"):
+    app, _ = _app(lambda r: Principal(name="admin"), osc52=osc52)
+    return app.test_client().get("/mux/local/alice/job/attach")
+
+
+def test_attach_page_has_copy_control():
+    r = _attach()
+    assert r.status_code == 200
+    html = r.data.decode()
+    assert 'data-mb-copy' in html
+    assert ">Copy<" in html
+    assert 'data-mb-osc52="off"' in html
+
+
+def test_attach_page_loads_web_links_addon():
+    r = _attach()
+    assert r.status_code == 200
+    assert b"addon-web-links" in r.data
+
+
+def test_attach_omits_clipboard_addon_when_osc52_off():
+    r = _attach("off")
+    assert r.status_code == 200
+    assert b"addon-clipboard" not in r.data
+    assert b"<dialog data-mb-clip-query" not in r.data
+
+
+def test_attach_includes_clipboard_addon_when_osc52_write():
+    r = _attach("write")
+    assert r.status_code == 200
+    html = r.data.decode()
+    assert "addon-clipboard" in html
+    assert 'data-mb-osc52="write"' in html
+    assert "<dialog data-mb-clip-query" not in html
+    assert "65536" in html
+
+
+def test_attach_query_prompt_when_osc52_read_write():
+    r = _attach("read-write")
+    assert r.status_code == 200
+    html = r.data.decode()
+    assert "addon-clipboard" in html
+    assert 'data-mb-osc52="read-write"' in html
+    assert "<dialog data-mb-clip-query" in html
+    assert "data-mb-clip-allow" in html
+    assert "data-mb-clip-deny" in html

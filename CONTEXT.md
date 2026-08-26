@@ -33,11 +33,11 @@ The operator-highlighted span of text in an Attach. Muxboard owns this highlight
 _Avoid_: native selection, highlight
 
 **Copy**:
-An operator action that puts the current Selection on the system clipboard. Empty Selection is not Copy.
+An operator action that puts the current Selection on the system clipboard. Empty Selection is not Copy. A Selection that is a hard-wrapped `http`/`https` URL is copied as one URL (newlines stripped); any other Selection is copied as highlighted.
 _Avoid_: dump, export, capture
 
 **Link**:
-An `http` or `https` URL in Attach output. The operator opens it with a modifier-click (Ctrl+click, Cmd+click on macOS) into a new tab.
+An `http` or `https` URL in Attach output, including one the Session hard-wrapped at the pane width. The operator opens it with a modifier-click (Ctrl+click, Cmd+click on macOS) into a new tab.
 _Avoid_: hyperlink, web-link
 
 **Clipboard push**:

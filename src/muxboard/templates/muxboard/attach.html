@@ -37,7 +37,7 @@
 
   <script src="{{ xterm.js }}"></script>
   <script src="{{ xterm.fit }}"></script>
-  <script src="{{ xterm.weblinks }}"></script>
+  <script src="{{ url_for('muxboard.static', filename='muxboard/wrap-url.js') }}"></script>
   {% if osc52 != "off" %}
   <script src="{{ xterm.clipboard }}"></script>
   {% endif %}
@@ -101,11 +101,6 @@
 
     function setLinkTitle(text) { termEl.title = text || ''; }
 
-    var webLinks = new window.WebLinksAddon.WebLinksAddon(openLink, {
-      hover: function (_ev, text) { setLinkTitle(text); },
-      leave: function () { setLinkTitle(''); },
-    });
-    term.loadAddon(webLinks);
     term.options.linkHandler = {
       activate: openLink,
       hover: function (_ev, text) { setLinkTitle(text); },
@@ -115,6 +110,22 @@
 
     term.open(termEl);
     fitAddon.fit();
+
+    // Regex Links: join xterm soft wrap and Session hard wrap (Claude login
+    // URLs). WebLinksAddon only concatenates isWrapped rows, so a TUI newline
+    // at cols made the Link the first line. OSC 8 still uses linkHandler.
+    term.registerLinkProvider({
+      provideLinks: function (y, callback) {
+        if (!window.mbWrapUrl) { callback(undefined); return; }
+        var rows = window.mbWrapUrl.bufferLines(term);
+        var links = window.mbWrapUrl.linksOnLine(rows, y - 1, term.cols, openLink);
+        links.forEach(function (link) {
+          link.hover = function (_ev, text) { setLinkTitle(text); };
+          link.leave = function () { setLinkTitle(''); };
+        });
+        callback(links.length ? links : undefined);
+      }
+    });
 
     function syncCopyBtn() {
       if (!copyBtn) return;
@@ -127,6 +138,9 @@
 
     function doCopy() {
       var text = term.getSelection();
+      if (window.mbWrapUrl && window.mbWrapUrl.copyText) {
+        text = window.mbWrapUrl.copyText(text);
+      }
       if (!text) return;
       function ok() {
         if (!copyBtn) return;

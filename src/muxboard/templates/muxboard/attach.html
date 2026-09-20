@@ -21,8 +21,13 @@
       <code>{{ session_name }}</code>
     </span>
     <button type="button" class="mb-btn mb-btn-sm" data-mb-copy disabled title="nothing selected">Copy</button>
+    <button type="button" class="mb-btn mb-btn-sm mb-btn-danger" data-mb-attach-kill>
+      kill
+    </button>
     <span class="mb-attach-status" data-state="connecting" id="mb-status">connecting...</span>
   </header>
+  <p class="mb-error" id="mb-kill-error" hidden></p>
+  <div id="mb-killed" hidden>Session killed. This tab can be closed.</div>
   <div id="mb-terminal" aria-label="Terminal output"></div>
   {% if osc52 == "read-write" %}
   <dialog data-mb-clip-query class="mb-dialog">
@@ -57,6 +62,11 @@
     var copyBtn = document.querySelector('[data-mb-copy]');
     var statusRestore = null;
     var copiedTimer = null;
+    var killBtn = document.querySelector('[data-mb-attach-kill]');
+    var killErr = document.getElementById('mb-kill-error');
+    var ws = null;
+    var connected = false;
+    var killed = false;
 
     function setStatus(state, msg) {
       statusEl.dataset.state = state;
@@ -64,12 +74,66 @@
     }
 
     function flashStatus(msg) {
+      if (killed) return;
       if (statusRestore) clearTimeout(statusRestore);
       setStatus(statusEl.dataset.state, msg);
       statusRestore = setTimeout(function () {
         statusRestore = null;
         if (connected) setStatus('open', 'connected');
       }, 2500);
+    }
+
+    function showKillError(msg) {
+      if (killErr) {
+        killErr.hidden = false;
+        killErr.textContent = msg;
+      }
+      setStatus('error', 'kill failed');
+      if (killBtn) killBtn.disabled = false;
+    }
+
+    function showKilledState() {
+      killed = true;
+      connected = false;
+      try { if (ws) ws.close(); } catch (e) {}
+      setStatus('closed', 'session killed');
+      if (killErr) { killErr.hidden = true; killErr.textContent = ''; }
+      var banner = document.getElementById('mb-killed');
+      if (banner) banner.hidden = false;
+      if (termEl) termEl.hidden = true;
+      document.body.classList.add('mb-attach-killed');
+      if (killBtn) killBtn.disabled = true;
+    }
+
+    if (killBtn) {
+      killBtn.addEventListener('click', function () {
+        if (!window.confirm('Kill session ' + SESSION_NAME + '?')) return;
+        if (killErr) { killErr.hidden = true; killErr.textContent = ''; }
+        killBtn.disabled = true;
+        var body = new URLSearchParams();
+        body.set('name', SESSION_NAME);
+        body.set('confirm', SESSION_NAME);
+        fetch(BASE + '/api/' + encodeURIComponent(HOST_KEY) + '/' +
+              encodeURIComponent(TMUX_USER) + '/kill', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+        })
+          .then(function (r) {
+            return r.json().then(function (j) { return { ok: r.ok, body: j }; });
+          })
+          .then(function (res) {
+            if (!res.ok || !res.body.ok) {
+              showKillError((res.body && res.body.error) || 'failed');
+              return;
+            }
+            window.close();
+            showKilledState();
+          })
+          .catch(function (e) {
+            showKillError(String(e));
+          });
+      });
     }
 
     var term = new window.Terminal({
@@ -247,11 +311,14 @@
                 '/' + encodeURIComponent(TMUX_USER) +
                 '/' + encodeURIComponent(SESSION_NAME);
 
-    var ws = new WebSocket(wsUrl);
+    ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
-    var connected = false;
 
     ws.addEventListener('open', function () {
+      if (killed) {
+        try { ws.close(); } catch (e) {}
+        return;
+      }
       connected = true;
       setStatus('open', 'connected');
       sendResize();
@@ -278,11 +345,15 @@
 
     ws.addEventListener('close', function (ev) {
       connected = false;
+      if (killed) return;
       setStatus('closed', 'disconnected' + (ev.code ? (' (' + ev.code + ')') : ''));
       term.writeln('\r\n\x1b[33m[bridge closed]\x1b[0m');
     });
 
-    ws.addEventListener('error', function () { setStatus('error', 'connection error'); });
+    ws.addEventListener('error', function () {
+      if (killed) return;
+      setStatus('error', 'connection error');
+    });
 
     term.onData(function (data) {
       if (!connected) return;

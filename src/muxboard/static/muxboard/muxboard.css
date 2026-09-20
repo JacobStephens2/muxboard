@@ -135,3 +135,13 @@ body.mb-attach-page { margin: 0; background: #0b0b0b; color: #ddd; height: 100vh
 .mb-attach-status[data-state="closed"], .mb-attach-status[data-state="error"] { color: #ff938c; }
 .mb-attach-status[data-state="connecting"] { color: #f0c860; }
 #mb-terminal { flex: 1; min-height: 0; padding: 6px; }
+#mb-kill-error {
+  margin: 0; padding: 8px 14px; border-bottom: 1px solid #5a2e2c;
+}
+#mb-killed {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--mb-muted); font-size: 15px; padding: 24px;
+}
+#mb-killed[hidden],
+#mb-kill-error[hidden] { display: none; }
+body.mb-attach-killed #mb-terminal { display: none; }

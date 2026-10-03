@@ -87,6 +87,11 @@ async function killCases() {
     const out = await client(fetch).kill(TARGET);
     check("Kill: JSON refusal without an error still fails", out.ok === false && out.error === "failed");
   }
+  {
+    const fetch = fakeFetch({ status: 500, json: null });
+    const out = await client(fetch).kill(TARGET);
+    check("Kill: a null JSON body still resolves to a failure", out.ok === false && out.error === "failed");
+  }
 }
 
 // Create
@@ -156,10 +161,11 @@ function missingDeps() {
   for (const fn of [
     () => sessions.client({ base: "/mux" }),
     () => sessions.client({ fetch: () => {} }),
+    () => sessions.client(null),
   ]) {
     try { fn(); } catch (e) { threw++; }
   }
-  check("Missing dependencies fail loudly", threw === 2);
+  check("Missing dependencies fail loudly", threw === 3);
 }
 
 missingDeps();

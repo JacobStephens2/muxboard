@@ -426,10 +426,11 @@ function missingDeps() {
     () => attachSession({ sessions: null }),
     () => attachSession({ clock: { setTimeout() {}, clearTimeout() {} } }),
     () => attachSession({ location: {} }),
+    () => attachSession({ target: null }),
   ]) {
     try { fn(); } catch (e) { threw++; }
   }
-  check("Missing dependencies fail loudly", threw === 6);
+  check("Missing dependencies fail loudly", threw === 7);
 }
 
 // Attach session controller
@@ -526,7 +527,7 @@ function fakeSessions(outcome) {
 function attachSession(over) {
   const o = over || {};
   const env = {
-    target: o.target || { host: "web 1", user: "al/ice", name: "my work" },
+    target: "target" in o ? o.target : { host: "web 1", user: "al/ice", name: "my work" },
     base: "/mux",
     location: o.location || { protocol: "https:", host: "board.example:8443" },
     socket: (url) => { env.sock = fakeSocket(); env.sock.url = url; return env.sock; },
@@ -544,7 +545,7 @@ function attachSession(over) {
   };
   const origKilled = env.view.killed;
   env.view.killed = () => { env.order.push("killed"); origKilled(); };
-  env.session = attach.session(env);
+  env.session = attach.controller(env);
   return env;
 }
 
@@ -553,28 +554,28 @@ function lifecycleCases() {
     const env = attachSession();
     env.session.start();
     check(
-      "Session: socket URL is wss on https, segments encoded",
+      "Attach: socket URL is wss on https, segments encoded",
       env.sock.url === "wss://board.example:8443/mux/ws/web%201/al%2Fice/my%20work",
       env.sock.url
     );
-    check("Session: socket receives ArrayBuffer frames", env.sock.binaryType === "arraybuffer");
+    check("Attach: socket receives ArrayBuffer frames", env.sock.binaryType === "arraybuffer");
     check(
-      "Session: status starts connecting",
+      "Attach: status starts connecting",
       env.view.last[0] === "connecting" && env.view.last[1] === "connecting..."
     );
   }
   {
     const env = attachSession({ location: { protocol: "http:", host: "localhost:5000" } });
     env.session.start();
-    check("Session: socket URL is ws on http", env.sock.url.startsWith("ws://localhost:5000/mux/ws/"));
+    check("Attach: socket URL is ws on http", env.sock.url.startsWith("ws://localhost:5000/mux/ws/"));
   }
   {
     const env = attachSession();
     env.session.start();
     env.sock.emit("open");
-    check("Session: open reports connected", env.view.last.join() === "open,connected");
+    check("Attach: open reports connected", env.view.last.join() === "open,connected");
     check(
-      "Session: open sends a fitted resize and focuses the terminal",
+      "Attach: open sends a fitted resize and focuses the terminal",
       env.sock.sent.length === 1 &&
         env.sock.sent[0].type === "resize" &&
         env.sock.sent[0].cols === 80 &&
@@ -583,9 +584,9 @@ function lifecycleCases() {
         env.term.focused === 1
     );
     env.sock.emit("close", { code: 1006 });
-    check("Session: close reports disconnected with code", env.view.last.join() === "closed,disconnected (1006)");
+    check("Attach: close reports disconnected with code", env.view.last.join() === "closed,disconnected (1006)");
     check(
-      "Session: close writes the bridge closed line",
+      "Attach: close writes the bridge closed line",
       env.term.written.some((w) => w.includes("[bridge closed]"))
     );
   }
@@ -593,9 +594,9 @@ function lifecycleCases() {
     const env = attachSession();
     env.session.start();
     env.sock.emit("close", { code: 0 });
-    check("Session: close without code reports disconnected", env.view.last.join() === "closed,disconnected");
+    check("Attach: close without code reports disconnected", env.view.last.join() === "closed,disconnected");
     env.sock.emit("error");
-    check("Session: error reports connection error", env.view.last.join() === "error,connection error");
+    check("Attach: error reports connection error", env.view.last.join() === "error,connection error");
   }
 }
 
@@ -609,13 +610,13 @@ async function frameCases() {
   env.sock.emit("message", { data: { arrayBuffer: () => Promise.resolve(new Uint8Array([7]).buffer) } });
   await new Promise((r) => setImmediate(r));
   const w = env.term.written;
-  check("Session: bytes frames are written", w[0] instanceof Uint8Array && w[0][0] === 104);
-  check("Session: text frames are written", w[1] === "plain");
+  check("Attach: bytes frames are written", w[0] instanceof Uint8Array && w[0][0] === 104);
+  check("Attach: text frames are written", w[1] === "plain");
   check(
-    "Session: bridge error frames are written in red",
+    "Attach: bridge error frames are written in red",
     typeof w[2] === "string" && w[2].includes("\x1b[31m[bridge error] boom")
   );
-  check("Session: Blob frames are written", w[3] instanceof Uint8Array && w[3][0] === 7);
+  check("Attach: Blob frames are written", w[3] instanceof Uint8Array && w[3][0] === 7);
 }
 
 function inputCases() {
@@ -623,15 +624,15 @@ function inputCases() {
     const env = attachSession();
     env.session.start();
     env.term.dataFn("x");
-    check("Session: input before open is dropped", env.sock.sent.length === 0);
+    check("Attach: input before open is dropped", env.sock.sent.length === 0);
     env.sock.emit("open");
     env.term.dataFn("ls\r");
     const last = env.sock.sent[env.sock.sent.length - 1];
-    check("Session: input while connected is sent", last.type === "input" && last.data === "ls\r");
+    check("Attach: input while connected is sent", last.type === "input" && last.data === "ls\r");
     env.sock.emit("close", { code: 1000 });
     const n = env.sock.sent.length;
     env.term.dataFn("y");
-    check("Session: input after close is dropped", env.sock.sent.length === n);
+    check("Attach: input after close is dropped", env.sock.sent.length === n);
   }
   {
     const clock = fakeClock();
@@ -643,32 +644,32 @@ function inputCases() {
     clock.advance(50);
     env.session.resize();
     clock.advance(79);
-    check("Session: resize is debounced", env.sock.sent.length === n);
+    check("Attach: resize is debounced", env.sock.sent.length === n);
     clock.advance(1);
     check(
-      "Session: one resize is sent 80 ms after the last",
+      "Attach: one resize is sent 80 ms after the last",
       env.sock.sent.length === n + 1 && env.sock.sent[n].type === "resize"
     );
     env.sock.emit("close", { code: 1000 });
     env.session.resize();
     clock.advance(80);
-    check("Session: resize while disconnected is not sent", env.sock.sent.length === n + 1);
+    check("Attach: resize while disconnected is not sent", env.sock.sent.length === n + 1);
   }
   {
     const clock = fakeClock();
     const env = attachSession({ clock });
     env.session.start();
     clock.advance(30000);
-    check("Session: no ping before connected", env.sock.sent.length === 0);
+    check("Attach: no ping before connected", env.sock.sent.length === 0);
     env.sock.emit("open");
     const n = env.sock.sent.length;
     clock.advance(29999);
-    check("Session: no ping before 30 s", env.sock.sent.length === n);
+    check("Attach: no ping before 30 s", env.sock.sent.length === n);
     clock.advance(1);
-    check("Session: ping every 30 s while connected", env.sock.sent[n] && env.sock.sent[n].type === "ping");
+    check("Attach: ping every 30 s while connected", env.sock.sent[n] && env.sock.sent[n].type === "ping");
     env.sock.emit("close", { code: 1000 });
     clock.advance(60000);
-    check("Session: no ping after close", env.sock.sent.length === n + 1);
+    check("Attach: no ping after close", env.sock.sent.length === n + 1);
   }
 }
 

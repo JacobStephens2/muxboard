@@ -2,9 +2,9 @@
   'use strict';
 
   // muxboard dashboard controller: refresh, kill (modal), create (modal),
-  // and relative-time formatting. Kill and create requests go through
-  // sessions.js, which the page loads first. The attach link is a plain <a> to the
-  // attach page; no JS needed for it.
+  // and relative-time formatting. The attach link is a plain <a> to the
+  // attach page; no JS needed for it. Kill and create requests go
+  // through sessions.js, which the page loads first.
 
   function $(sel, root) { return (root || document).querySelector(sel); }
   function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }

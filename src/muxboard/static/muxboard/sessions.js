@@ -21,7 +21,7 @@
   }
 
   function requireDep(env, name, type) {
-    if (!env || typeof env[name] !== type) {
+    if (!env || typeof env[name] !== type || env[name] === null) {
       throw new TypeError("mbSessions: " + name + " must be a " + type);
     }
     return env[name];

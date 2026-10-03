@@ -5,8 +5,8 @@
  * The page builds DOM, xterm and its addons and hands them to this module.
  * Everything the module needs from the browser (platform, open, clipboard,
  * prompt, socket, timers, view callbacks) is passed in, so Node tests drive
- * it with fakes. Regex Links and
- * the Copy join come from wrap-url.js, which the page loads first.
+ * it with fakes. Regex Links and the Copy join come from wrap-url.js, which
+ * the page loads first.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
@@ -184,19 +184,15 @@
     return null;
   }
 
-  // Attach session: the page's connection lifecycle, input, Kill, status
+  // Attach session controller: the page's connection lifecycle, input, Kill, status
   // flash and Copy feedback. The page builds xterm and the DOM and passes
   // them in with the socket factory, timers and view callbacks.
-  function session(env) {
-    var target = env && env.target;
-    if (!target || typeof target.name !== "string") {
-      throw new TypeError("mbAttach: target must have a Session name");
-    }
+  function controller(env) {
+    var target = requireDep(env, "target", "object");
+    requireDep(target, "name", "string");
     var base = requireDep(env, "base", "string");
-    var location = env.location;
-    if (!location || typeof location.host !== "string") {
-      throw new TypeError("mbAttach: location must have a host");
-    }
+    var location = requireDep(env, "location", "object");
+    requireDep(location, "host", "string");
     var openSocket = requireDep(env, "socket", "function");
     var term = requireDep(env, "term", "object");
     var fit = requireDep(env, "fit", "function");
@@ -208,6 +204,8 @@
     var confirm = requireDep(env, "confirm", "function");
     var closeWindow = requireDep(env, "closeWindow", "function");
     var view = requireDep(env, "view", "object");
+    // Optional: navigator.clipboard is undefined off secure origins, and
+    // copy() then reports "failed".
     var clipboard = env.clipboard;
 
     var ws = null;
@@ -294,10 +292,10 @@
     }
 
     function syncCopyButton() {
-      var has = term.hasSelection();
+      var selected = term.hasSelection();
       view.copyButton({
-        disabled: !has,
-        title: has ? "" : "nothing selected",
+        disabled: !selected,
+        title: selected ? "" : "nothing selected",
         label: copiedTimer ? "Copied" : "Copy",
       });
     }
@@ -386,7 +384,7 @@
   }
 
   return {
-    session: session,
+    controller: controller,
     links: links,
     copy: copy,
     isCopyChord: isCopyChord,

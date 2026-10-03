@@ -87,7 +87,7 @@
 
     term.registerLinkProvider(links.provider(term));
 
-    var session = attachClient.session({
+    var session = attachClient.controller({
       target: {
         host: {{ host_key | tojson }},
         user: {{ tmux_user | tojson }},

@@ -21,7 +21,6 @@ same app via flask-sock.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable, Optional
 
@@ -40,7 +39,7 @@ from flask import (
 from .auth import Authorizer, Principal, deny_all
 from .inventory import Host
 from .tmuxctl import TmuxController
-from .ttyproxy import AttachCapacityExceeded, SlotManager, bridge
+from .ttyproxy import AttachCapacityExceeded, SlotManager, bridge, error_close
 
 log = logging.getLogger("muxboard")
 
@@ -366,13 +365,13 @@ class Muxboard:
             try:
                 argv, env_add = self.controller.attach_argv(host, user, name)
             except Exception as exc:  # noqa: BLE001
-                _ws_error_close(ws, str(exc))
+                error_close(ws, str(exc))
                 return
             try:
                 self.slots.acquire(principal.name)
             except AttachCapacityExceeded as exc:
                 log.warning("muxboard attach refused (cap): %s by=%s", exc, principal.name)
-                _ws_error_close(ws, str(exc), code=4029)
+                error_close(ws, str(exc), code=4029)
                 return
             self.audit("muxboard.attach.start", host=key, target_user=user,
                        session_name=name, by=principal.name)
@@ -389,16 +388,5 @@ class Muxboard:
 def _ws_close(ws: Any, code: int, message: str) -> None:
     try:
         ws.close(reason=code, message=message)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ws_error_close(ws: Any, message: str, code: Optional[int] = None) -> None:
-    try:
-        ws.send(json.dumps({"type": "error", "message": message}))
-        if code is not None:
-            ws.close(reason=code, message=message[:120])
-        else:
-            ws.close()
     except Exception:  # noqa: BLE001
         pass

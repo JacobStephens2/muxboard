@@ -2,6 +2,7 @@ import pytest
 from flask import Flask
 
 from muxboard import Host, Muxboard, Principal
+from muxboard.listing import ListedSession, Listing
 from muxboard.sweep import Sweep
 
 
@@ -20,14 +21,15 @@ def _app(authorize, **kwargs):
 
 
 def _listing(host):
-    return {
-        "ok": True, "error": None,
-        "sessions": {"alice": [{"name": "a", "windows": 1, "created": 1,
-                                 "attached": False, "activity": 1, "id": "$1"}],
-                     "bob": [{"name": "b", "windows": 1, "created": 1,
-                              "attached": False, "activity": 1, "id": "$2"}]},
-        "errors": {}, "users": ["alice", "bob"], "sweep_ms": 1,
-    }
+    return Listing.worked(
+        host,
+        sessions={"alice": [ListedSession(user="alice", name="a", windows=1, created=1,
+                                          attached=False, activity=1, id="$1")],
+                  "bob": [ListedSession(user="bob", name="b", windows=1, created=1,
+                                        attached=False, activity=1, id="$2")]},
+        errors={},
+        elapsed_ms=1,
+    )
 
 
 def _fake_sweep(board, lister=_listing):
@@ -58,6 +60,15 @@ def test_admin_renders_dashboard():
     assert b"muxboard" in r.data
     assert b"alice" in r.data
     assert b"bob" in r.data
+
+
+def test_dashboard_renders_each_swept_session_with_its_user():
+    app, board = _app(lambda r: Principal(name="admin"))
+    _fake_sweep(board)
+    board.sweep.refresh()
+    html = app.test_client().get("/mux/").get_data(as_text=True)
+    assert 'data-mb-sess-user="alice"' in html
+    assert 'data-mb-sess-name="b"' in html
 
 
 def test_scoped_principal_filters_sessions_json():

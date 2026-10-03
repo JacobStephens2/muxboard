@@ -2,7 +2,8 @@ import threading
 
 from muxboard.auth import Principal
 from muxboard.inventory import Host
-from muxboard.sweep import Sweep, failed_result
+from muxboard.listing import ListedSession, Listing
+from muxboard.sweep import Sweep
 
 
 def _host(key, users=("alice", "bob")):
@@ -10,15 +11,14 @@ def _host(key, users=("alice", "bob")):
 
 
 def _ok(host):
-    return {
-        "ok": True, "error": None,
-        "sessions": {u: [{"name": f"{u}-1", "windows": 1, "created": 1,
-                          "attached": False, "activity": 1, "id": "$1"}]
-                     for u in host.tmux_users},
-        "errors": {u: "sudo refused" for u in host.tmux_users},
-        "users": list(host.tmux_users),
-        "sweep_ms": 1,
-    }
+    return Listing.worked(
+        host,
+        sessions={u: [ListedSession(user=u, name=f"{u}-1", windows=1, created=1,
+                                    attached=False, activity=1, id="$1")]
+                  for u in host.tmux_users},
+        errors={u: "sudo refused" for u in host.tmux_users},
+        elapsed_ms=1,
+    )
 
 
 class _Clock:
@@ -179,10 +179,3 @@ def test_start_twice_starts_one_loop(monkeypatch):
     sweep.start()
     assert started == ["muxboard-sweep"]
 
-
-def test_failed_result_shape():
-    result = failed_result(_host("a"), "boom", sweep_ms=7)
-    assert result == {
-        "ok": False, "error": "boom", "sessions": {}, "errors": {},
-        "users": ["alice", "bob"], "sweep_ms": 7,
-    }

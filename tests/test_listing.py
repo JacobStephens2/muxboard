@@ -135,3 +135,58 @@ def test_listing_is_equal_by_value_but_not_hashable():
     assert _worked() == _worked()
     with pytest.raises(TypeError):
         hash(_worked())
+
+
+# ---------- Session order ----------
+
+
+SWARM_ORDER = (
+    "swarmforge-specifier",
+    "swarmforge-coder",
+    "swarmforge-cleaner",
+    "swarmforge-architect",
+    "swarmforge-hardender",
+    "swarmforge-QA",
+)
+
+
+def _ordered(names, session_order=()):
+    host = Host(key="a", hostname="a.example.com", ssh_user="ops",
+                tmux_users=("deploy",), session_order=session_order)
+    sessions = {"deploy": [_session("deploy", n, f"${i}") for i, n in enumerate(names)]}
+    listing = Listing.worked(host, sessions=sessions, errors={}, elapsed_ms=0)
+    return [s.name for s in listing.sessions["deploy"]]
+
+
+def test_worked_sorts_session_names_naturally():
+    assert _ordered(["22", "3", "alpha10", "2", "alpha2"]) == [
+        "2", "3", "22", "alpha2", "alpha10",
+    ]
+
+
+def test_worked_honours_the_hosts_session_order():
+    names = [
+        "swarmforge-architect", "swarmforge-cleaner", "swarmforge-coder",
+        "swarmforge-hardender", "swarmforge-QA", "swarmforge-specifier",
+    ]
+    assert _ordered(names, SWARM_ORDER) == list(SWARM_ORDER)
+
+
+def test_unnamed_sessions_follow_named_ones_naturally_sorted():
+    names = ["build-22", "swarmforge-coder", "build-3", "swarmforge-specifier"]
+    assert _ordered(names, SWARM_ORDER) == [
+        "swarmforge-specifier", "swarmforge-coder", "build-3", "build-22",
+    ]
+
+
+def test_session_order_matches_by_prefix():
+    assert _ordered(["zulu-1", "alpha-9", "alpha-10"], ("zulu",)) == [
+        "zulu-1", "alpha-9", "alpha-10",
+    ]
+
+
+def test_overlapping_prefixes_are_first_entry_wins():
+    names = ["build-final", "build-1"]
+    assert _ordered(names, ("build-final", "build")) == ["build-final", "build-1"]
+    # Swapped, the broad entry absorbs the specific one and natural order rules.
+    assert _ordered(names, ("build", "build-final")) == ["build-1", "build-final"]

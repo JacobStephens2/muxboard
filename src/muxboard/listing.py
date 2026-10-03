@@ -10,6 +10,7 @@ the JSON ``api/sessions`` returns and the Dashboard template reads.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional
@@ -64,11 +65,19 @@ class Listing:
         errors: Mapping[str, str],
         elapsed_ms: int,
     ) -> Listing:
-        """A listing that reached the Host; per-user failures go in ``errors``."""
+        """A listing that reached the Host; per-user failures go in ``errors``.
+
+        Each Tmux user's Sessions are put in the Host's ``session_order``,
+        then naturally, whatever order they arrive in.
+        """
+        order = tuple(host.session_order)
         return cls(
             ok=True,
             error=None,
-            sessions=MappingProxyType({u: tuple(ss) for u, ss in sessions.items()}),
+            sessions=MappingProxyType({
+                u: tuple(sorted(ss, key=lambda s: _order_key(s.name, order)))
+                for u, ss in sessions.items()
+            }),
             errors=MappingProxyType(dict(errors)),
             users=tuple(host.tmux_users),
             elapsed_ms=elapsed_ms,
@@ -116,3 +125,42 @@ class Listing:
             "checked_at": self.checked_at,
         }
 
+
+def _natural_key(name: str) -> list[tuple[int, int, str]]:
+    """Numeric-aware sort key for Session names.
+
+    Names like ``1``, ``2``, ``22`` are common in operator dashboards; natural
+    ordering keeps them in numeric order instead of lexicographic order.
+    """
+    return [
+        (0, int(part), "") if part.isdigit() else (1, 0, part.lower())
+        for part in re.split(r"(\d+)", name)
+        if part
+    ]
+
+
+def _order_key(
+    name: str, session_order: tuple[str, ...]
+) -> tuple[int, list[tuple[int, int, str]]]:
+    """Sort key honouring a Host's explicit ``session_order``.
+
+    The rank is the index of the first entry in ``session_order`` that equals
+    ``name`` or is a prefix of it; a name matching no entry ranks after every
+    named one. Ties - including every name on a Host that configures no order -
+    fall through to :func:`_natural_key`, so an unconfigured Host sorts exactly
+    as it always has.
+
+    First-entry-wins is what makes an overlapping order predictable: with
+    ``("build-final", "build")`` the specific entry is reachable, and with the
+    two swapped ``build-final`` is absorbed by the prefix. Documented rather
+    than resolved by longest-match, because the operator wrote the order down
+    and reading it top to bottom should be the whole rule.
+    """
+    if not session_order:
+        return (0, _natural_key(name))
+    rank = len(session_order)
+    for i, entry in enumerate(session_order):
+        if name.startswith(entry):
+            rank = i
+            break
+    return (rank, _natural_key(name))

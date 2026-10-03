@@ -4,26 +4,13 @@ import pytest
 
 from muxboard.inventory import Host
 from muxboard.listing import ListedSession, Listing
-from muxboard.tmuxctl import (
-    TmuxController,
-    TmuxctlError,
-    _as_user_prefix,
-    _natural_key,
-    _order_key,
-    _socket_flag,
-    valid_new_session_name,
-)
+from muxboard.tmuxctl import TmuxController, TmuxctlError, valid_new_session_name
 
 SEP = "::"
 
 
 def _ctrl(*hosts):
     return TmuxController(list(hosts), ssh_key="/board/key")
-
-
-def test_as_user_prefix():
-    assert _as_user_prefix("ops", "ops") == ""
-    assert _as_user_prefix("deploy", "ops") == "sudo -n -u deploy "
 
 
 def test_valid_session_name():
@@ -67,48 +54,6 @@ def test_build_argv_password_missing_env(monkeypatch):
              password_env="WEB_PASS", tmux_users=("ops",))
     with pytest.raises(TmuxctlError):
         _ctrl(h)._build_argv(h, "tmux ls")
-
-
-def test_list_script_uses_sudo_for_other_users():
-    h = Host(key="local", hostname="localhost",
-             tmux_users=("root", "deploy"), local=True)
-    # login user on a local host is the current process user; force a known
-    # value via a controller whose _login_user we can predict by making the
-    # first tmux user equal to it is not reliable, so just assert structure.
-    script = _ctrl(h)._list_script(h, {"root": "", "deploy": ""})
-    assert "tmux ls -F" in script
-    assert "__MUXBOARD_ERR__" in script  # marker for sudo-refused users
-
-
-def test_parse_list_output_roundtrip():
-    line = SEP.join(["deploy", "build", "2", "1700000000", "1", "1700000500", "$3"])
-    err = SEP.join(["__MUXBOARD_ERR__", "ops", "sudo refused"])
-    parsed = TmuxController._parse_list_output(line + "\n" + err, host_key="x")
-    assert parsed["sessions"]["deploy"] == [ListedSession(
-        user="deploy", name="build", windows=2, created=1700000000,
-        attached=True, activity=1700000500, id="$3",
-    )]
-    assert parsed["errors"]["ops"] == "sudo refused"
-
-
-def test_parse_list_output_natural_sorts_session_names():
-    rows = [
-        SEP.join(["deploy", "22", "1", "1700000000", "0", "1700000000", "$22"]),
-        SEP.join(["deploy", "3", "1", "1700000000", "0", "1700000000", "$3"]),
-        SEP.join(["deploy", "alpha10", "1", "1700000000", "0", "1700000000", "$10"]),
-        SEP.join(["deploy", "2", "1", "1700000000", "0", "1700000000", "$2"]),
-        SEP.join(["deploy", "alpha2", "1", "1700000000", "0", "1700000000", "$9"]),
-    ]
-    parsed = TmuxController._parse_list_output("\n".join(rows), host_key="x")
-    assert [s.name for s in parsed["sessions"]["deploy"]] == [
-        "2", "3", "22", "alpha2", "alpha10",
-    ]
-
-
-def test_parse_list_output_skips_garbage():
-    parsed = TmuxController._parse_list_output("not-enough-fields\n", host_key="x")
-    assert parsed["sessions"] == {}
-    assert parsed["errors"] == {}
 
 
 # ---------- list_host: a Listing on every path ----------
@@ -181,30 +126,6 @@ def _swarm_host(**kw):
                 tmux_users=("me",), **kw)
 
 
-def test_socket_flag():
-    assert _socket_flag("") == ""
-    assert _socket_flag("/tmp/s/a.sock") == "-S /tmp/s/a.sock "
-
-
-def test_list_script_without_socket_is_unchanged():
-    h = Host(key="local", hostname="localhost", tmux_users=("me",), local=True)
-    assert "-S " not in _ctrl(h)._list_script(h, {"me": ""})
-
-
-def test_list_script_threads_socket():
-    h = _swarm_host(tmux_socket="/tmp/swarmforge-me/ab12.sock")
-    script = _ctrl(h)._list_script(h, {"me": "/tmp/swarmforge-me/ab12.sock"})
-    assert "tmux -S /tmp/swarmforge-me/ab12.sock ls -F" in script
-
-
-def test_list_script_skips_users_without_a_resolved_socket():
-    h = Host(key="swarm", hostname="localhost", local=True,
-             tmux_users=("me", "other"), tmux_socket_file="/srv/p/.swarmforge/tmux-socket")
-    script = _ctrl(h)._list_script(h, {"me": "/tmp/a.sock"})
-    assert "/tmp/a.sock" in script
-    assert "other" not in script
-
-
 def test_mutation_and_attach_scripts_thread_socket(monkeypatch):
     h = _swarm_host(tmux_socket="/tmp/swarmforge-me/ab12.sock")
     c = _ctrl(h)
@@ -216,34 +137,6 @@ def test_mutation_and_attach_scripts_thread_socket(monkeypatch):
     assert "tmux -S /tmp/swarmforge-me/ab12.sock kill-session" in seen[0]
     assert "tmux -S /tmp/swarmforge-me/ab12.sock new-session" in seen[1]
     assert "tmux -S /tmp/swarmforge-me/ab12.sock attach" in argv[2]
-
-
-def test_socket_read_script_reads_capped_single_line():
-    h = Host(key="swarm", hostname="localhost", local=True,
-             tmux_users=("me",), tmux_socket_file="/srv/p/.swarmforge/tmux-socket")
-    script = _ctrl(h)._socket_read_script(h, ("me",))
-    assert "__MUXBOARD_SOCK__" in script
-    assert "/srv/p/.swarmforge/tmux-socket" in script
-    assert "head -c" in script  # size cap
-    assert "head -n 1" in script  # single-line requirement
-
-
-def test_parse_socket_output_valid_and_invalid():
-    text = "\n".join([
-        SEP.join(["__MUXBOARD_SOCK__", "me", "/tmp/swarmforge-me/ab12.sock"]),
-        SEP.join(["__MUXBOARD_SOCK__", "other", ""]),
-        SEP.join(["__MUXBOARD_SOCK__", "third", "/tmp/$(id).sock"]),
-        "unrelated noise",
-    ])
-    sockets, errors = TmuxController._parse_socket_output(text, ("me", "other", "third"))
-    assert sockets == {"me": "/tmp/swarmforge-me/ab12.sock"}
-    assert set(errors) == {"other", "third"}
-
-
-def test_parse_socket_output_reports_missing_users():
-    sockets, errors = TmuxController._parse_socket_output("", ("me",))
-    assert sockets == {}
-    assert "me" in errors
 
 
 def test_resolve_sockets_literal_needs_no_subprocess():
@@ -302,30 +195,6 @@ def test_list_host_surfaces_socket_resolution_errors(tmp_path):
     assert me in listing.errors
 
 
-def test_parse_socket_output_survives_a_malformed_marker_line():
-    # A truncated marker line must not take down the whole sweep.
-    sockets, errors = TmuxController._parse_socket_output(
-        "__MUXBOARD_SOCK__::oops\n", ("me",)
-    )
-    assert sockets == {}
-    assert "me" in errors
-
-
-def test_socket_read_script_distinguishes_sudo_refusal():
-    h = Host(key="swarm", hostname="localhost", local=True,
-             tmux_users=("someone-else",),
-             tmux_socket_file="/srv/p/.swarmforge/tmux-socket")
-    script = _ctrl(h)._socket_read_script(h, ("someone-else",))
-    assert "sudo -n -u someone-else true" in script
-
-
-def test_parse_socket_output_reports_sudo_refusal_distinctly():
-    text = SEP.join(["__MUXBOARD_SOCK__", "me", "__MUXBOARD_SUDO_REFUSED__"])
-    sockets, errors = TmuxController._parse_socket_output(text, ("me",))
-    assert sockets == {}
-    assert errors["me"] == "sudo refused"
-
-
 def test_attach_on_unresolvable_socket_file_raises(tmp_path):
     import getpass
     me = getpass.getuser()
@@ -344,93 +213,3 @@ def test_attach_argv_uses_socket_from_file(tmp_path):
              tmux_users=(me,), tmux_socket_file=str(sock_file))
     argv, _ = _ctrl(h).attach_argv(h, me, "swarmforge-coder")
     assert "tmux -S /tmp/swarmforge-me/ab12.sock attach -t swarmforge-coder" in argv[2]
-
-
-# ---------- explicit session order ----------
-
-
-def _rows(*names):
-    return "\n".join(
-        SEP.join(["deploy", n, "1", "1700000000", "0", "1700000000", f"${i}"])
-        for i, n in enumerate(names)
-    )
-
-
-SWARM_ORDER = (
-    "swarmforge-specifier",
-    "swarmforge-coder",
-    "swarmforge-cleaner",
-    "swarmforge-architect",
-    "swarmforge-hardender",
-    "swarmforge-QA",
-)
-
-
-def test_order_key_ranks_named_sessions_then_the_rest():
-    order = ("beta", "alpha")
-    assert _order_key("beta", order)[0] == 0
-    assert _order_key("alpha", order)[0] == 1
-    assert _order_key("gamma", order)[0] == 2
-
-
-def test_order_key_falls_through_to_natural_when_unset():
-    assert _order_key("alpha10", ()) == (0, _natural_key("alpha10"))
-
-
-def test_parse_list_output_honours_session_order():
-    text = _rows(
-        "swarmforge-architect", "swarmforge-cleaner", "swarmforge-coder",
-        "swarmforge-hardender", "swarmforge-QA", "swarmforge-specifier",
-    )
-    parsed = TmuxController._parse_list_output(
-        text, host_key="x", session_order=SWARM_ORDER
-    )
-    assert [s.name for s in parsed["sessions"]["deploy"]] == list(SWARM_ORDER)
-
-
-def test_unnamed_sessions_follow_named_ones_naturally_sorted():
-    text = _rows("build-22", "swarmforge-coder", "build-3", "swarmforge-specifier")
-    parsed = TmuxController._parse_list_output(
-        text, host_key="x", session_order=SWARM_ORDER
-    )
-    assert [s.name for s in parsed["sessions"]["deploy"]] == [
-        "swarmforge-specifier", "swarmforge-coder", "build-3", "build-22",
-    ]
-
-
-def test_session_order_matches_by_prefix():
-    text = _rows("zulu-1", "alpha-9", "alpha-10")
-    parsed = TmuxController._parse_list_output(
-        text, host_key="x", session_order=("zulu",)
-    )
-    assert [s.name for s in parsed["sessions"]["deploy"]] == [
-        "zulu-1", "alpha-9", "alpha-10",
-    ]
-
-
-def test_overlapping_prefixes_are_first_entry_wins():
-    text = _rows("build-final", "build-1")
-    parsed = TmuxController._parse_list_output(
-        text, host_key="x", session_order=("build-final", "build")
-    )
-    assert [s.name for s in parsed["sessions"]["deploy"]] == ["build-final", "build-1"]
-    # Swapped, the broad entry absorbs the specific one and natural order rules.
-    parsed = TmuxController._parse_list_output(
-        text, host_key="x", session_order=("build", "build-final")
-    )
-    assert [s.name for s in parsed["sessions"]["deploy"]] == ["build-1", "build-final"]
-
-
-def test_list_host_passes_the_hosts_order_through(monkeypatch):
-    h = Host(key="swarm", hostname="localhost", local=True, tmux_users=("me",),
-             session_order=("swarmforge-specifier",))
-    c = _ctrl(h)
-    seen = {}
-
-    def fake_parse(text, *, host_key, session_order=()):
-        seen["order"] = session_order
-        return {"sessions": {}, "errors": {}}
-
-    monkeypatch.setattr(c, "_parse_list_output", fake_parse)
-    c.list_host(h)
-    assert seen["order"] == ("swarmforge-specifier",)

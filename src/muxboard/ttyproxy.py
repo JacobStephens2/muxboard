@@ -1,7 +1,8 @@
 """WebSocket <-> PTY bridge for a live terminal attach.
 
-The board's ``/ws/<key>/<user>/<name>`` route hands its WebSocket connection
-to :func:`bridge`. We spawn the attach command (``ssh -tt ... tmux attach`` or
+The board's ``/ws/<key>/<user>/<name>`` route checks access, then hands its
+WebSocket connection to :meth:`AttachRunner.run`, which takes an attach slot,
+audits, and drives :func:`bridge`. The bridge spawns the attach command (``ssh -tt ... tmux attach`` or
 a local ``tmux attach`` under :mod:`pty`) and shuttle bytes:
 
   - Browser -> server:  text JSON ``{"type":"input","data":"..."}`` for
@@ -21,7 +22,8 @@ descriptors or zombie processes.
 
 :class:`SlotManager` caps concurrent attaches per principal and globally, so a
 single (or compromised) account cannot exhaust FDs/PIDs/RAM by opening
-hundreds of shells.
+hundreds of shells. :class:`AttachRunner` owns one, so callers never acquire
+or release a slot themselves.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ import subprocess
 import termios
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 log = logging.getLogger("muxboard.ttyproxy")
 
@@ -301,3 +303,79 @@ def bridge(
         except Exception:  # noqa: BLE001
             pass
         log.info("muxboard: bridge closed (exit=%s)", proc.returncode)
+
+
+# The attach command callable: () -> (argv, extra environment).
+AttachCommand = Callable[[], "tuple[list[str], dict[str, str]]"]
+
+
+class AttachRunner:
+    """Runs one Attach on a WebSocket, from slot to teardown.
+
+    The run order is: take a slot, build the attach command, emit
+    ``muxboard.attach.start``, run the bridge, release the slot, emit
+    ``muxboard.attach.end``. Each step that fails sends the browser an error
+    frame and a close, and the slot is released on every path. A raising
+    start hook blocks the Attach, so no Attach runs unaudited; a raising end
+    hook is logged and swallowed.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_per_user: int,
+        max_global: int,
+        audit: Callable[..., None],
+    ) -> None:
+        self._slots = SlotManager(max_per_user=max_per_user, max_global=max_global)
+        self._audit = audit
+
+    def run(
+        self,
+        ws: Any,
+        *,
+        by: str,
+        host: str,
+        target_user: str,
+        session_name: str,
+        attach_command: AttachCommand,
+    ) -> None:
+        """Run one Attach as ``by`` and return once it is over.
+
+        ``attach_command`` is called only once a slot is held, since building
+        the command may run a command on the Host.
+        """
+        try:
+            self._slots.acquire(by)
+        except AttachCapacityExceeded as exc:
+            log.warning("muxboard attach refused (cap): %s by=%s", exc, by)
+            error_close(ws, str(exc), code=4029)
+            return
+        fields = {"host": host, "target_user": target_user,
+                  "session_name": session_name, "by": by}
+        started = False
+        try:
+            try:
+                argv, env_add = attach_command()
+            except Exception as exc:  # noqa: BLE001
+                error_close(ws, str(exc))
+                return
+            try:
+                self._audit("muxboard.attach.start", **fields)
+            except Exception:  # noqa: BLE001
+                log.exception("muxboard attach.start audit failed; refusing attach")
+                error_close(ws, "attach failed")
+                return
+            started = True
+            try:
+                bridge(ws, argv, env_add)
+            except Exception:  # noqa: BLE001
+                log.exception("muxboard bridge crashed")
+                error_close(ws, "attach failed")
+        finally:
+            self._slots.release(by)
+            if started:
+                try:
+                    self._audit("muxboard.attach.end", **fields)
+                except Exception:  # noqa: BLE001
+                    log.exception("muxboard attach.end audit failed")

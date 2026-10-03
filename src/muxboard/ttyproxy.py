@@ -8,11 +8,16 @@ a local ``tmux attach`` under :mod:`pty`) and shuttle bytes:
                         keystrokes and ``{"type":"resize","cols":N,"rows":N}``
                         for terminal resizing. ``{"type":"ping"}`` is a no-op
                         keepalive.
-  - Server -> browser:  binary frames of raw bytes from the PTY master fd.
+  - Server -> browser:  binary frames of raw bytes from the PTY master fd, or
+                        one text JSON ``{"type":"error","message":"..."}``
+                        (see :func:`error_close`) before the socket closes.
 
 A background drain thread reads the PTY; the main thread reads the WebSocket.
-Either side disconnecting tears down the SSH/tmux process group so we never
-leak file descriptors or zombie processes.
+The drain thread sends each chunk synchronously, so a slow browser holds it up
+and back-pressures the PTY: there is no output queue, and memory per attach is
+bounded by one read chunk. Either side disconnecting, or the attach outliving
+its lifetime cap, tears down the SSH/tmux process group so we never leak file
+descriptors or zombie processes.
 
 :class:`SlotManager` caps concurrent attaches per principal and globally, so a
 single (or compromised) account cannot exhaust FDs/PIDs/RAM by opening
@@ -34,7 +39,7 @@ import subprocess
 import termios
 import threading
 import time
-from typing import Any
+from typing import Any, Optional
 
 log = logging.getLogger("muxboard.ttyproxy")
 
@@ -45,10 +50,6 @@ _READ_CHUNK = 16 * 1024
 # WebSocket receive() poll timeout. Keeps the loop responsive to subprocess
 # exit without burning CPU.
 _WS_RECV_TIMEOUT = 0.25
-
-# Cap on queued output when the WebSocket is slow. Hitting it closes the
-# connection rather than ballooning memory.
-_MAX_QUEUE_BYTES = 4 * 1024 * 1024  # 4 MiB
 
 # Hard lifetime cap on one attach. Belt-and-braces against a leaked subprocess
 # if neither the browser nor SSH ever closes cleanly.
@@ -154,8 +155,11 @@ def _spawn_pty(
 
 
 def _drain_pty_thread(master_fd: int, ws: Any, stop_event: threading.Event) -> None:
-    """Background: read PTY master, send to WebSocket as binary frames."""
-    queued = 0
+    """Background: read PTY master, send to WebSocket as binary frames.
+
+    ``ws.send`` writes to the socket before returning, so a slow browser
+    blocks this loop and back-pressures the PTY instead of queueing output.
+    """
     while not stop_event.is_set():
         try:
             ready, _, _ = select.select([master_fd], [], [], 0.5)
@@ -172,21 +176,39 @@ def _drain_pty_thread(master_fd: int, ws: Any, stop_event: threading.Event) -> N
             continue
         if not data:
             break
-        queued += len(data)
-        if queued > _MAX_QUEUE_BYTES:
-            log.warning("muxboard: queue cap %d exceeded; closing", _MAX_QUEUE_BYTES)
-            break
         try:
             ws.send(data)  # bytes -> binary frame on flask-sock / simple-websocket
         except Exception as exc:  # noqa: BLE001
             log.debug("ws send failed: %s", exc)
             break
-        queued = 0
     stop_event.set()
 
 
-def bridge(ws: Any, argv: list[str], env_add: dict[str, str]) -> None:
-    """Drive the bridge until either end disconnects.
+def error_close(ws: Any, message: str, code: Optional[int] = None) -> None:
+    """Send an error frame, then close the socket.
+
+    With ``code`` the close carries it and ``message`` cut to 120 characters
+    as the reason; without one the close is plain. A failing socket is
+    swallowed: the browser has already gone.
+    """
+    try:
+        ws.send(json.dumps({"type": "error", "message": message}))
+        if code is not None:
+            ws.close(reason=code, message=message[:120])
+        else:
+            ws.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def bridge(
+    ws: Any,
+    argv: list[str],
+    env_add: dict[str, str],
+    *,
+    max_lifetime: float = _MAX_ATTACH_SECONDS,
+) -> None:
+    """Drive the bridge until either end disconnects or ``max_lifetime`` seconds pass.
 
     Called synchronously from the flask-sock route handler thread.
     """
@@ -207,7 +229,7 @@ def bridge(ws: Any, argv: list[str], env_add: dict[str, str]) -> None:
         while not stop.is_set():
             if proc.poll() is not None:
                 break
-            if time.monotonic() - started > _MAX_ATTACH_SECONDS:
+            if time.monotonic() - started > max_lifetime:
                 log.info("muxboard: max attach lifetime reached")
                 break
             try:

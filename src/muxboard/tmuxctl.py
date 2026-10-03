@@ -25,7 +25,7 @@ import time
 from typing import Any, Optional
 
 from .inventory import Host, index_by_key, valid_socket_path
-from .sweep import failed_result
+from .listing import ListedSession, Listing
 
 log = logging.getLogger("muxboard.tmuxctl")
 
@@ -394,7 +394,9 @@ class TmuxController:
     def _parse_list_output(
         text: str, *, host_key: str, session_order: tuple[str, ...] = ()
     ) -> dict[str, Any]:
-        sessions_by_user: dict[str, list[dict[str, Any]]] = {}
+        """``{sessions: {user: [ListedSession]}, errors: {user: msg}}``, each
+        user's Sessions in the Host's order."""
+        sessions_by_user: dict[str, list[ListedSession]] = {}
         errors: dict[str, str] = {}
         err_prefix = "__MUXBOARD_ERR__" + _SEP
         for raw in text.splitlines():
@@ -411,31 +413,28 @@ class TmuxController:
                 continue
             user, name, windows, created, attached, activity, sid = cols[:7]
             try:
-                entry = {
-                    "user": user,
-                    "name": name,
-                    "windows": int(windows),
-                    "created": int(created),
-                    "attached": int(attached) > 0,
-                    "activity": int(activity),
-                    "id": sid,
-                }
+                entry = ListedSession(
+                    user=user,
+                    name=name,
+                    windows=int(windows),
+                    created=int(created),
+                    attached=int(attached) > 0,
+                    activity=int(activity),
+                    id=sid,
+                )
             except ValueError:
                 log.debug("tmux list (%s): bad ints in %r", host_key, raw)
                 continue
             sessions_by_user.setdefault(user, []).append(entry)
         for sessions in sessions_by_user.values():
-            sessions.sort(key=lambda e: _order_key(e["name"], session_order))
+            sessions.sort(key=lambda e: _order_key(e.name, session_order))
         return {"sessions": sessions_by_user, "errors": errors}
 
-    def list_host(self, host: Host) -> dict[str, Any]:
-        """Return ``{ok, error, sessions:{user:[...]}, errors:{user:msg}, users, sweep_ms}``."""
+    def list_host(self, host: Host) -> Listing:
+        """List ``host``'s Sessions. Every failure is a Listing too, never raised."""
         start = time.monotonic()
         if not host.tmux_users:
-            return {
-                "ok": True, "error": None, "sessions": {}, "errors": {},
-                "users": [], "sweep_ms": 0,
-            }
+            return Listing.worked(host, sessions={}, errors={}, sweep_ms=0)
         try:
             sockets, socket_errors = self._resolve_sockets(host)
         except TmuxctlError as exc:
@@ -443,11 +442,9 @@ class TmuxController:
         if not sockets:
             # Every user's socket file failed to resolve; there is nothing to
             # ask tmux, but the reason belongs in the UI.
-            return {
-                "ok": True, "error": None, "sessions": {}, "errors": socket_errors,
-                "users": list(host.tmux_users),
-                "sweep_ms": int((time.monotonic() - start) * 1000),
-            }
+            return Listing.worked(
+                host, sessions={}, errors=socket_errors, sweep_ms=_elapsed_ms(start)
+            )
         argv, env_add = self._build_argv(host, self._list_script(host, sockets))
         env = {**os.environ, **env_add} if env_add else None
         try:
@@ -465,19 +462,16 @@ class TmuxController:
         parsed = self._parse_list_output(
             r.stdout, host_key=host.key, session_order=tuple(host.session_order)
         )
-        return {
-            "ok": True, "error": None,
-            "sessions": parsed["sessions"],
-            "errors": {**socket_errors, **parsed["errors"]},
-            "users": list(host.tmux_users),
-            "sweep_ms": int((time.monotonic() - start) * 1000),
-        }
+        return Listing.worked(
+            host,
+            sessions=parsed["sessions"],
+            errors={**socket_errors, **parsed["errors"]},
+            sweep_ms=_elapsed_ms(start),
+        )
 
     @staticmethod
-    def _list_fail(host: Host, error: str, start: float) -> dict[str, Any]:
-        return failed_result(
-            host, error, sweep_ms=int((time.monotonic() - start) * 1000)
-        )
+    def _list_fail(host: Host, error: str, start: float) -> Listing:
+        return Listing.failed(host, error, sweep_ms=_elapsed_ms(start))
 
     # ---------- kill / create ----------
 
@@ -532,6 +526,10 @@ class TmuxController:
             raise TmuxctlError(f"unknown user {user!r} on {host.key}")
         remote = f"{self._tmux_for(host, user)}attach -t {shlex.quote(name)}"
         return self._build_argv(host, remote, interactive=True)
+
+
+def _elapsed_ms(start: float) -> int:
+    return int((time.monotonic() - start) * 1000)
 
 
 def _current_username() -> str:

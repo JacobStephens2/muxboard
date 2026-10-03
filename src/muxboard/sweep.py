@@ -1,14 +1,14 @@
 """The Sweep: the Board's periodic listing of every Host's Sessions.
 
-The Dashboard and ``api/sessions`` read the Sweep's latest result and never a
+The Dashboard and ``api/sessions`` read the Sweep's latest Listings and never a
 live listing, so a request never blocks on SSH. Refresh runs a Sweep now, for
 every Host or for one.
 
 The seam is the *lister*, a callable from a :class:`~muxboard.inventory.Host`
-to that Host's list result. The Board passes the tmux controller's
-``list_host``; tests pass a fake. A lister that raises never escapes: the
-exception becomes that Host's failed result, the same as any other listing
-failure.
+to that Host's :class:`~muxboard.listing.Listing`. The Board passes the tmux
+controller's ``list_host``; tests pass a fake. A lister that raises never
+escapes: the exception becomes that Host's failed Listing, the same as any
+other listing failure.
 """
 
 from __future__ import annotations
@@ -21,26 +21,15 @@ from typing import Any, Callable, Optional
 
 from .auth import Principal
 from .inventory import Host
+from .listing import Listing
 
 log = logging.getLogger("muxboard.sweep")
 
-# A Host's list result: ``{ok, error, sessions:{user:[...]}, errors:{user:msg},
-# users, sweep_ms}``. Kept a dict because ``api/sessions`` returns it as JSON
-# and the Dashboard template reads its keys.
-Lister = Callable[[Host], "dict[str, Any]"]
-
-
-def failed_result(host: Host, error: str, *, sweep_ms: int = 0) -> dict[str, Any]:
-    """The list result for a Host whose listing failed outright."""
-    return {
-        "ok": False, "error": error, "sessions": {}, "errors": {},
-        "users": list(host.tmux_users),
-        "sweep_ms": sweep_ms,
-    }
+Lister = Callable[[Host], Listing]
 
 
 class Sweep:
-    """Latest list result per Host, the loop that renews it, and Refresh."""
+    """Latest Listing per Host, the loop that renews it, and Refresh."""
 
     def __init__(
         self,
@@ -58,7 +47,7 @@ class Sweep:
         self._interval = interval
         self._clock = _clock
         self._lock = threading.Lock()
-        self._results: dict[str, dict[str, Any]] = {}
+        self._listings: dict[str, Listing] = {}
         self._last_sweep: Optional[float] = None
         self._thread_started = False
         self._thread_lock = threading.Lock()
@@ -91,24 +80,25 @@ class Sweep:
         return True
 
     def view(self, principal: Principal) -> dict[str, Any]:
-        """The latest results, scoped to the Tmux users ``principal`` may use."""
+        """The latest Listings, scoped to the Tmux users ``principal`` may use.
+
+        Each Host's ``result`` is its Listing's dict form, fresh on every call,
+        so a caller holding the view cannot edit the store.
+        """
         allowed = principal.allowed_users
         with self._lock:
             hosts = []
             for h in self._hosts:
-                result = self._results.get(h.key)
+                listing = self._listings.get(h.key)
                 users = list(h.tmux_users)
                 if allowed is not None:
                     users = [u for u in users if u in allowed]
-                if result:
-                    # A copy, so a caller holding the view cannot edit the store.
-                    result = _scope_result(result, allowed)
                 hosts.append({
                     "key": h.key,
                     "hostname": h.hostname,
                     "label": h.display,
                     "users": users,
-                    "result": result,
+                    "result": listing.scoped(allowed).as_dict() if listing is not None else None,
                 })
             return {"hosts": hosts, "last_sweep": self._last_sweep}
 
@@ -117,16 +107,16 @@ class Sweep:
     def _workers(self) -> int:
         return max(1, len(self._hosts))
 
-    def _list(self, host: Host) -> dict[str, Any]:
+    def _list(self, host: Host) -> Listing:
         try:
             return self._lister(host)
         except Exception as exc:  # noqa: BLE001
             log.exception("muxboard sweep failed for %s", host.key)
-            return failed_result(host, f"{exc.__class__.__name__}: {exc}")
+            return Listing.failed(host, f"{exc.__class__.__name__}: {exc}")
 
-    def _record(self, host: Host, result: dict[str, Any]) -> None:
+    def _record(self, host: Host, listing: Listing) -> None:
         with self._lock:
-            self._results[host.key] = {**result, "checked_at": self._clock()}
+            self._listings[host.key] = listing.stamped(self._clock())
 
     def _sweep_all(self, executor: ThreadPoolExecutor) -> None:
         futures = {executor.submit(self._list, h): h for h in self._hosts}
@@ -144,15 +134,3 @@ class Sweep:
                     log.exception("muxboard sweep loop iteration failed")
                 time.sleep(self._interval)
 
-
-def _scope_result(
-    result: dict[str, Any], allowed: Optional[frozenset[str]]
-) -> dict[str, Any]:
-    if allowed is None:
-        return dict(result)
-    return {
-        **result,
-        "sessions": {u: v for u, v in (result.get("sessions") or {}).items() if u in allowed},
-        "errors": {u: v for u, v in (result.get("errors") or {}).items() if u in allowed},
-        "users": [u for u in (result.get("users") or []) if u in allowed],
-    }

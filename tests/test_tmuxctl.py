@@ -1,6 +1,9 @@
+import subprocess
+
 import pytest
 
 from muxboard.inventory import Host
+from muxboard.listing import ListedSession, Listing
 from muxboard.tmuxctl import (
     TmuxController,
     TmuxctlError,
@@ -81,9 +84,10 @@ def test_parse_list_output_roundtrip():
     line = SEP.join(["deploy", "build", "2", "1700000000", "1", "1700000500", "$3"])
     err = SEP.join(["__MUXBOARD_ERR__", "ops", "sudo refused"])
     parsed = TmuxController._parse_list_output(line + "\n" + err, host_key="x")
-    assert parsed["sessions"]["deploy"][0]["name"] == "build"
-    assert parsed["sessions"]["deploy"][0]["windows"] == 2
-    assert parsed["sessions"]["deploy"][0]["attached"] is True
+    assert parsed["sessions"]["deploy"] == [ListedSession(
+        user="deploy", name="build", windows=2, created=1700000000,
+        attached=True, activity=1700000500, id="$3",
+    )]
     assert parsed["errors"]["ops"] == "sudo refused"
 
 
@@ -96,7 +100,7 @@ def test_parse_list_output_natural_sorts_session_names():
         SEP.join(["deploy", "alpha2", "1", "1700000000", "0", "1700000000", "$9"]),
     ]
     parsed = TmuxController._parse_list_output("\n".join(rows), host_key="x")
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+    assert [s.name for s in parsed["sessions"]["deploy"]] == [
         "2", "3", "22", "alpha2", "alpha10",
     ]
 
@@ -105,6 +109,61 @@ def test_parse_list_output_skips_garbage():
     parsed = TmuxController._parse_list_output("not-enough-fields\n", host_key="x")
     assert parsed["sessions"] == {}
     assert parsed["errors"] == {}
+
+
+# ---------- list_host: a Listing on every path ----------
+
+
+def _local(*users):
+    return Host(key="box", hostname="localhost", local=True, tmux_users=users)
+
+
+def _fake_run(monkeypatch, *, raises=None, returncode=0, stdout="", stderr=""):
+    def run(argv, **kwargs):
+        if raises is not None:
+            raise raises
+        return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+
+    monkeypatch.setattr("muxboard.tmuxctl.subprocess.run", run)
+
+
+def test_list_host_on_an_inventory_only_host_is_an_empty_listing():
+    h = _local()
+    assert _ctrl(h).list_host(h) == Listing.worked(h, sessions={}, errors={}, sweep_ms=0)
+
+
+def test_list_host_success_is_a_listing_of_listed_sessions(monkeypatch):
+    h = _local("me")
+    _fake_run(monkeypatch, stdout=SEP.join(["me", "s1", "1", "5", "0", "6", "$1"]) + "\n")
+    listing = _ctrl(h).list_host(h)
+    assert listing.ok is True
+    assert listing.users == ("me",)
+    assert listing.sessions["me"] == (ListedSession(
+        user="me", name="s1", windows=1, created=5, attached=False, activity=6, id="$1",
+    ),)
+
+
+def test_list_host_timeout_is_a_failed_listing(monkeypatch):
+    h = _local("me")
+    _fake_run(monkeypatch, raises=subprocess.TimeoutExpired(["bash"], 1))
+    listing = _ctrl(h).list_host(h)
+    assert (listing.ok, listing.error, listing.users) == (False, "timeout (>24s)", ("me",))
+
+
+def test_list_host_oserror_is_a_failed_listing(monkeypatch):
+    h = _local("me")
+    _fake_run(monkeypatch, raises=FileNotFoundError("no bash"))
+    listing = _ctrl(h).list_host(h)
+    assert listing.ok is False
+    assert listing.error == "FileNotFoundError: no bash"
+
+
+def test_list_host_nonzero_exit_with_no_output_is_a_failed_listing(monkeypatch):
+    h = _local("me")
+    _fake_run(monkeypatch, returncode=255, stderr="warning\nconnection refused\n")
+    listing = _ctrl(h).list_host(h)
+    assert listing.ok is False
+    assert listing.error == "exit 255: connection refused"
 
 
 def test_kill_unknown_user_raises():
@@ -237,10 +296,10 @@ def test_list_host_surfaces_socket_resolution_errors(tmp_path):
     me = getpass.getuser()
     h = Host(key="swarm", hostname="localhost", local=True,
              tmux_users=(me,), tmux_socket_file=str(tmp_path / "nope"))
-    result = _ctrl(h).list_host(h)
-    assert result["ok"] is True
-    assert result["sessions"] == {}
-    assert me in result["errors"]
+    listing = _ctrl(h).list_host(h)
+    assert listing.ok is True
+    assert listing.sessions == {}
+    assert me in listing.errors
 
 
 def test_parse_socket_output_survives_a_malformed_marker_line():
@@ -326,7 +385,7 @@ def test_parse_list_output_honours_session_order():
     parsed = TmuxController._parse_list_output(
         text, host_key="x", session_order=SWARM_ORDER
     )
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == list(SWARM_ORDER)
+    assert [s.name for s in parsed["sessions"]["deploy"]] == list(SWARM_ORDER)
 
 
 def test_unnamed_sessions_follow_named_ones_naturally_sorted():
@@ -334,7 +393,7 @@ def test_unnamed_sessions_follow_named_ones_naturally_sorted():
     parsed = TmuxController._parse_list_output(
         text, host_key="x", session_order=SWARM_ORDER
     )
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+    assert [s.name for s in parsed["sessions"]["deploy"]] == [
         "swarmforge-specifier", "swarmforge-coder", "build-3", "build-22",
     ]
 
@@ -344,7 +403,7 @@ def test_session_order_matches_by_prefix():
     parsed = TmuxController._parse_list_output(
         text, host_key="x", session_order=("zulu",)
     )
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == [
+    assert [s.name for s in parsed["sessions"]["deploy"]] == [
         "zulu-1", "alpha-9", "alpha-10",
     ]
 
@@ -354,12 +413,12 @@ def test_overlapping_prefixes_are_first_entry_wins():
     parsed = TmuxController._parse_list_output(
         text, host_key="x", session_order=("build-final", "build")
     )
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == ["build-final", "build-1"]
+    assert [s.name for s in parsed["sessions"]["deploy"]] == ["build-final", "build-1"]
     # Swapped, the broad entry absorbs the specific one and natural order rules.
     parsed = TmuxController._parse_list_output(
         text, host_key="x", session_order=("build", "build-final")
     )
-    assert [s["name"] for s in parsed["sessions"]["deploy"]] == ["build-1", "build-final"]
+    assert [s.name for s in parsed["sessions"]["deploy"]] == ["build-1", "build-final"]
 
 
 def test_list_host_passes_the_hosts_order_through(monkeypatch):

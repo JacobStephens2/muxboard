@@ -25,8 +25,12 @@ The HTML list of Hosts, tmux users, and Sessions.
 _Avoid_: console (legacy URL)
 
 **Sweep**:
-The Board's periodic listing of every Host's Sessions; the Dashboard shows its latest result, never a live listing. Refresh runs one now, for every Host or for one.
+The Board's periodic listing of every Host's Sessions; the Dashboard shows its latest Listings, never a live listing. Refresh runs one now, for every Host or for one.
 _Avoid_: poll, scan
+
+**Listing**:
+What listing one Host's Sessions produces: whether it worked, the Sessions per Tmux user, an error per Tmux user, and when the Sweep recorded it. The Sweep keeps the latest Listing per Host.
+_Avoid_: list result, snapshot
 
 **Attach**:
 A live, interactive browser view of one Session.

@@ -117,6 +117,165 @@
   </dialog>
 
   <script src="{{ url_for('muxboard.static', filename='muxboard/sessions.js') }}"></script>
-  <script src="{{ url_for('muxboard.static', filename='muxboard/muxboard.js') }}"></script>
+  <script src="{{ url_for('muxboard.static', filename='muxboard/dashboard.js') }}"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    function $(sel, root) { return (root || document).querySelector(sel); }
+    function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+    var dashboardClient = window.mbDashboard;
+    var BASE = (document.body.getAttribute('data-muxboard-base') || '').replace(/\/$/, '');
+
+    var killDialog = $('[data-mb-kill-dialog]');
+    var createDialog = $('[data-mb-new-dialog]');
+    var refreshBtn = $('[data-mb-refresh]');
+
+    // Show or close a dialog to match state.open; true when it just opened.
+    function syncDialog(dlg, open) {
+      if (open && !dlg.open) { dlg.showModal(); return true; }
+      if (!open && dlg.open) dlg.close();
+      return false;
+    }
+
+    function renderError(el, msg) {
+      el.hidden = msg === null;
+      el.textContent = msg || '';
+    }
+
+    var dashboard = dashboardClient.controller({
+      sessions: window.mbSessions.client({ fetch: window.fetch.bind(window), base: BASE }),
+      // sessionStorage itself can throw in some browser modes, so reach it per call.
+      storage: {
+        getItem: function (k) { return window.sessionStorage.getItem(k); },
+        setItem: function (k, v) { window.sessionStorage.setItem(k, v); },
+        removeItem: function (k) { window.sessionStorage.removeItem(k); },
+      },
+      reload: function () { window.location.reload(); },
+      notify: function (msg) { window.alert(msg); },
+      view: {
+        kill: function (state) {
+          if (!killDialog) return;
+          var input = $('[data-mb-kill-confirm]', killDialog);
+          if (state.target) {
+            $('[data-mb-kill-label]', killDialog).textContent = state.target.name;
+            $('[data-mb-kill-host-label]', killDialog).textContent = state.target.host;
+            $('[data-mb-kill-user-label]', killDialog).textContent = state.target.user;
+          }
+          input.value = state.confirm;
+          renderError($('[data-mb-kill-error]', killDialog), state.error);
+          var go = $('[data-mb-kill-go]', killDialog);
+          go.disabled = state.busy;
+          go.textContent = state.goLabel;
+          if (syncDialog(killDialog, state.open)) input.focus();
+        },
+        create: function (state) {
+          if (!createDialog) return;
+          var nameInput = $('[data-mb-new-name]', createDialog);
+          if (state.target) {
+            $('[data-mb-new-host-label]', createDialog).textContent = state.target.host;
+            $('[data-mb-new-user-label]', createDialog).textContent = state.target.user;
+          }
+          nameInput.value = state.name;
+          $('[data-mb-new-cmd]', createDialog).value = state.command;
+          renderError($('[data-mb-new-error]', createDialog), state.error);
+          var go = $('[data-mb-new-go]', createDialog);
+          go.disabled = state.busy;
+          go.textContent = state.goLabel;
+          if (syncDialog(createDialog, state.open)) nameInput.focus();
+        },
+        refresh: function (state) {
+          if (!refreshBtn) return;
+          refreshBtn.disabled = state.busy;
+          refreshBtn.textContent = state.label;
+        },
+      },
+    });
+
+    // ---------- relative time ----------
+
+    var now = Math.floor(Date.now() / 1000);
+    $$('time[data-relative-unix]').forEach(function (el) {
+      var u = parseInt(el.getAttribute('data-relative-unix'), 10);
+      if (!u || isNaN(u)) return;
+      el.textContent = dashboardClient.formatRelative(u, now);
+      el.title = new Date(u * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+    });
+
+    // ---------- highlight the just-created session ----------
+
+    var want = dashboard.justCreated();
+    var row = want && $$('tr[data-mb-sess-host]').filter(function (r) {
+      return r.getAttribute('data-mb-sess-host') === want.host &&
+             r.getAttribute('data-mb-sess-user') === want.user &&
+             r.getAttribute('data-mb-sess-name') === want.name;
+    })[0];
+    if (row) {
+      var nameCell = $('.mb-session-name', row);
+      if (nameCell && !$('.mb-pill-new', nameCell)) {
+        var pill = document.createElement('span');
+        pill.className = 'mb-pill mb-pill-new';
+        pill.textContent = 'new';
+        nameCell.appendChild(pill);
+      }
+      row.classList.add('mb-just-created');
+      try {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {
+        row.scrollIntoView();
+      }
+      setTimeout(function () { row.classList.remove('mb-just-created'); }, 8000);
+    }
+
+    // ---------- wire up ----------
+
+    // Escape closes a dialog without a Cancel click.
+    if (killDialog) killDialog.addEventListener('close', function () { dashboard.cancelKill(); });
+    if (createDialog) createDialog.addEventListener('close', function () { dashboard.cancelCreate(); });
+
+    function submitCreate() {
+      dashboard.submitCreate($('[data-mb-new-name]', createDialog).value, $('[data-mb-new-cmd]', createDialog).value);
+    }
+
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      if (t.closest('[data-mb-refresh]')) { ev.preventDefault(); dashboard.refresh(); return; }
+      var kb = t.closest('[data-mb-kill-host]');
+      if (kb) {
+        ev.preventDefault();
+        dashboard.openKill({
+          host: kb.getAttribute('data-mb-kill-host'),
+          user: kb.getAttribute('data-mb-kill-user'),
+          name: kb.getAttribute('data-mb-kill-name'),
+        });
+        return;
+      }
+      if (t.closest('[data-mb-kill-cancel]')) { ev.preventDefault(); dashboard.cancelKill(); return; }
+      if (t.closest('[data-mb-kill-go]')) {
+        ev.preventDefault();
+        dashboard.confirmKill($('[data-mb-kill-confirm]', killDialog).value);
+        return;
+      }
+      var cb = t.closest('[data-mb-new-host]');
+      if (cb) {
+        ev.preventDefault();
+        dashboard.openCreate({ host: cb.getAttribute('data-mb-new-host'), user: cb.getAttribute('data-mb-new-user') });
+        return;
+      }
+      if (t.closest('[data-mb-new-cancel]')) { ev.preventDefault(); dashboard.cancelCreate(); return; }
+      if (t.closest('[data-mb-new-go]')) { ev.preventDefault(); submitCreate(); return; }
+    });
+
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter') return;
+      if (createDialog && createDialog.open && ev.target && ev.target.matches('[data-mb-new-name], [data-mb-new-cmd]')) {
+        ev.preventDefault();
+        submitCreate();
+      }
+    });
+  })();
+  </script>
 </body>
 </html>

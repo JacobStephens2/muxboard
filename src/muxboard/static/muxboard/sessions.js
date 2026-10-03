@@ -1,5 +1,5 @@
-/* Session requests: the client half of the Kill and create routes, shared
- * by the Dashboard and the Attach page.
+/* Session requests: the client half of the Kill, create and refresh routes,
+ * shared by the Dashboard and the Attach page.
  *
  * fetch and the Board base path are passed in, so Node tests drive the
  * module with a fake fetch. Requests resolve to an outcome and never reject:
@@ -31,12 +31,10 @@
     var fetchFn = requireDep(env, "fetch", "function");
     var base = requireDep(env, "base", "string");
 
-    function post(target, action, fields) {
+    function post(path, fields) {
       var body = new URLSearchParams();
       Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      var url = base + "/api/" + encodeURIComponent(target.host) + "/" +
-                encodeURIComponent(target.user) + "/" + action;
-      return fetchFn(url, {
+      return fetchFn(base + path, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -54,10 +52,16 @@
       });
     }
 
+    function postSession(target, action, fields) {
+      return post("/api/" + encodeURIComponent(target.host) + "/" +
+                  encodeURIComponent(target.user) + "/" + action, fields);
+    }
+
+    function okOnly(out) { return out.ok ? { ok: true } : out; }
+
     // Kill: the request echoes the Session name as confirmation.
     function kill(target) {
-      return post(target, "kill", { name: target.name, confirm: target.name })
-        .then(function (out) { return out.ok ? { ok: true } : out; });
+      return postSession(target, "kill", { name: target.name, confirm: target.name }).then(okOnly);
     }
 
     // Create: resolves {ok: true, name} with the name the server created.
@@ -66,12 +70,17 @@
       if (invalid) return Promise.resolve({ ok: false, error: invalid });
       var fields = { name: target.name };
       if (command) fields.command = command;
-      return post(target, "create", fields).then(function (out) {
+      return postSession(target, "create", fields).then(function (out) {
         return out.ok ? { ok: true, name: out.body.name || target.name } : out;
       });
     }
 
-    return { kill: kill, create: create };
+    // Refresh: sweeps every Host the Board knows.
+    function refresh() {
+      return post("/api/refresh", {}).then(okOnly);
+    }
+
+    return { kill: kill, create: create, refresh: refresh };
   }
 
   return { client: client, nameError: nameError };

@@ -243,7 +243,7 @@ Session creation can be narrower than listing, attaching, and killing. Set `Prin
 
 ## The supply-chain question: xterm.js
 
-The attach page loads xterm.js plus the fit addon, and (when `osc52` is not `"off"`) the clipboard addon. Three first-party scripts load after them: `sessions.js` sends the Kill and create requests (the Dashboard loads it too), `wrap-url.js` reconstructs regex Links across soft wrap and Session hard wrap, and `attach.js` holds the Attach rules for Link activation, Copy, Clipboard push and Clipboard query, the bridge wire frames, and the Attach session controller that owns the connection lifecycle, Kill and status. OSC 8 uses xterm's `linkHandler`, which `attach.js` supplies. By default the page pulls pinned versions (`@xterm/xterm@5.5.0`, `@xterm/addon-fit@0.10.0`, `@xterm/addon-clipboard@0.1.0`) from jsDelivr. That is a third-party script running on a page that grants shell access - a real supply-chain surface. Two ways to close it, in increasing order of paranoia:
+The attach page loads xterm.js plus the fit addon, and (when `osc52` is not `"off"`) the clipboard addon. Three first-party scripts load after them: `sessions.js` sends the Kill, create and refresh requests (the Dashboard loads it too), `wrap-url.js` reconstructs regex Links across soft wrap and Session hard wrap, and `attach.js` holds the Attach rules for Link activation, Copy, Clipboard push and Clipboard query, the bridge wire frames, and the Attach session controller that owns the connection lifecycle, Kill and status. OSC 8 uses xterm's `linkHandler`, which `attach.js` supplies. The Dashboard loads `sessions.js` and then `dashboard.js`, which holds the Dashboard controller: the type-the-name Kill gate, create, refresh, the just-created highlight and relative times. By default the page pulls pinned versions (`@xterm/xterm@5.5.0`, `@xterm/addon-fit@0.10.0`, `@xterm/addon-clipboard@0.1.0`) from jsDelivr. That is a third-party script running on a page that grants shell access - a real supply-chain surface. Two ways to close it, in increasing order of paranoia:
 
 1. Add Subresource Integrity. Pass your own `xterm_js_url` / `xterm_css_url` / `xterm_fit_url` / `xterm_clipboard_url` pointing at URLs you have pinned with SRI hashes in your own template, or front the CDN with a CSP that pins hashes.
 2. Self-host. Copy the assets into your own static directory and point the `*_url` kwargs at them. Then no external origin is in the trust path at all.
@@ -271,7 +271,7 @@ ruff check src tests
 pytest -q
 ```
 
-The tests cover inventory validation, the auth gates, argv construction and `tmux ls` parsing (no SSH or tmux required), and the blueprint's deny/allow/scope/confirm behavior through a Flask test client.
+The tests cover inventory validation, the auth gates, argv construction and `tmux ls` parsing (no SSH or tmux required), the blueprint's deny/allow/scope/confirm behavior through a Flask test client, and the first-party browser clients (`sessions.js`, `wrap-url.js`, `attach.js`, `dashboard.js`) through Node scripts in `tests/js/` driven with fakes. `tests/test_js.py` runs those scripts when `node` is on the PATH.
 
 ## License
 

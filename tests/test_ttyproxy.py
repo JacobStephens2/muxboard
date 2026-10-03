@@ -18,10 +18,8 @@ from muxboard.ttyproxy import AttachCapacityExceeded, SlotManager, bridge, error
 
 _JOIN_SECONDS = 10
 
-# Echoes each line it reads back with a prefix, so input is observable.
-_ECHO = ["sh", "-c", 'while read l; do echo "got:$l"; done']
-# Prints the PTY size for each line it reads.
-_STTY = ["sh", "-c", "while read l; do stty size; done"]
+_ECHO_LINES = ["sh", "-c", 'while read l; do echo "got:$l"; done']
+_PRINT_PTY_SIZE = ["sh", "-c", "while read l; do stty size; done"]
 
 
 class FakeWebSocket:
@@ -30,11 +28,12 @@ class FakeWebSocket:
     Queue an exception instance to have ``receive`` raise it.
     """
 
-    def __init__(self, *, send_raises: bool = False) -> None:
+    def __init__(self, *, send_raises: bool = False, close_raises: bool = False) -> None:
         self.inbox: queue.Queue = queue.Queue()
         self.sent: list = []
         self.closed: list = []
         self.send_raises = send_raises
+        self.close_raises = close_raises
         self._lock = threading.Lock()
 
     def push(self, msg) -> None:
@@ -59,6 +58,8 @@ class FakeWebSocket:
             self.sent.append(data)
 
     def close(self, reason=None, message=None) -> None:
+        if self.close_raises:
+            raise ConnectionError("browser has gone")
         self.closed.append((reason, message))
 
     def output(self) -> str:
@@ -68,13 +69,20 @@ class FakeWebSocket:
 
     def wait_for(self, text: str, start: int = 0, timeout: float = 5.0) -> int:
         """Wait until ``text`` appears in the output after ``start``; return the end offset."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            idx = self.output().find(text, start)
-            if idx >= 0:
-                return idx + len(text)
-            time.sleep(0.02)
-        raise AssertionError(f"{text!r} never arrived; output was {self.output()[start:]!r}")
+        idx = _poll(lambda: self.output().find(text, start) + 1, timeout,
+                    lambda: f"{text!r} never arrived; output was {self.output()[start:]!r}")
+        return idx - 1 + len(text)
+
+
+def _poll(check, timeout: float, failure):
+    """Call ``check`` until it returns something truthy, and return that; fail after ``timeout``."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = check()
+        if result:
+            return result
+        time.sleep(0.02)
+    raise AssertionError(failure())
 
 
 def _start(ws, argv, **kwargs) -> threading.Thread:
@@ -88,7 +96,8 @@ def _join(t: threading.Thread) -> None:
     assert not t.is_alive(), "bridge did not return"
 
 
-def _alive(pid: int) -> bool:
+def _running(pid: int) -> bool:
+    """Whether ``pid`` exists and is not a zombie (``/proc`` where present, else signal 0)."""
     try:
         with open(f"/proc/{pid}/stat") as fh:
             return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
@@ -103,27 +112,18 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _wait_dead(pid: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _alive(pid):
-            return
-        time.sleep(0.05)
-    os.kill(pid, signal.SIGKILL)
-    raise AssertionError(f"pid {pid} outlived the bridge")
+def _wait_gone(pid: int) -> None:
+    try:
+        _poll(lambda: not _running(pid), 5.0, lambda: f"pid {pid} outlived the bridge")
+    except AssertionError:
+        os.kill(pid, signal.SIGKILL)
+        raise
 
 
-def _read_pid(path, timeout: float = 5.0) -> int:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            text = path.read_text().strip()
-        except FileNotFoundError:
-            text = ""
-        if text:
-            return int(text)
-        time.sleep(0.02)
-    raise AssertionError("grandchild pid never written")
+def _read_pid(path) -> int:
+    text = _poll(lambda: path.exists() and path.read_text().strip(), 5.0,
+                 lambda: "grandchild pid never written")
+    return int(text)
 
 
 def _grandchild_argv(pid_file) -> list:
@@ -136,7 +136,7 @@ def _grandchild_argv(pid_file) -> list:
 
 def test_input_reaches_process_and_output_returns_as_bytes():
     ws = FakeWebSocket()
-    t = _start(ws, _ECHO)
+    t = _start(ws, _ECHO_LINES)
     try:
         ws.push_json({"type": "input", "data": "hello\n"})
         ws.wait_for("got:hello")
@@ -148,7 +148,7 @@ def test_input_reaches_process_and_output_returns_as_bytes():
 
 def test_raw_text_and_binary_frames_are_written_through_as_input():
     ws = FakeWebSocket()
-    t = _start(ws, _ECHO)
+    t = _start(ws, _ECHO_LINES)
     try:
         ws.push("not json\n")
         end = ws.wait_for("got:not json")
@@ -161,7 +161,7 @@ def test_raw_text_and_binary_frames_are_written_through_as_input():
 
 def test_empty_input_does_nothing():
     ws = FakeWebSocket()
-    t = _start(ws, _ECHO)
+    t = _start(ws, _ECHO_LINES)
     try:
         ws.push_json({"type": "input", "data": ""})
         ws.push_json({"type": "input"})
@@ -185,7 +185,7 @@ def test_empty_input_does_nothing():
 )
 def test_resize_sets_clamped_pty_size(frame, expected):
     ws = FakeWebSocket()
-    t = _start(ws, _STTY)
+    t = _start(ws, _PRINT_PTY_SIZE)
     try:
         # Move off the default first so a malformed resize is seen to reset it.
         ws.push_json({"type": "resize", "rows": 33, "cols": 77})
@@ -201,7 +201,7 @@ def test_resize_sets_clamped_pty_size(frame, expected):
 
 def test_ping_and_unknown_frames_are_ignored():
     ws = FakeWebSocket()
-    t = _start(ws, _ECHO)
+    t = _start(ws, _ECHO_LINES)
     try:
         ws.push_json({"type": "ping"})
         ws.push_json({"type": "nonsense", "data": "ignored\n"})
@@ -223,15 +223,15 @@ def test_returns_when_process_exits():
     _join(t)
 
 
-def test_receive_failure_kills_whole_process_group(tmp_path):
+def test_receive_failure_tears_down_whole_process_group(tmp_path):
     pid_file = tmp_path / "pid"
     ws = FakeWebSocket()
     t = _start(ws, _grandchild_argv(pid_file))
     grandchild = _read_pid(pid_file)
-    assert _alive(grandchild)
+    assert _running(grandchild)
     ws.push(ConnectionError("browser has gone"))
     _join(t)
-    _wait_dead(grandchild)
+    _wait_gone(grandchild)
 
 
 def test_send_failure_tears_process_down(tmp_path):
@@ -240,7 +240,7 @@ def test_send_failure_tears_process_down(tmp_path):
     t = _start(ws, _grandchild_argv(pid_file))
     grandchild = _read_pid(pid_file)
     _join(t)
-    _wait_dead(grandchild)
+    _wait_gone(grandchild)
 
 
 def test_lifetime_cap_tears_process_down(tmp_path):
@@ -249,7 +249,7 @@ def test_lifetime_cap_tears_process_down(tmp_path):
     t = _start(ws, _grandchild_argv(pid_file), max_lifetime=0.5)
     grandchild = _read_pid(pid_file)
     _join(t)
-    _wait_dead(grandchild)
+    _wait_gone(grandchild)
 
 
 # ---------- error frame ----------
@@ -274,6 +274,10 @@ def test_error_close_swallows_a_failing_socket():
     ws = FakeWebSocket(send_raises=True)
     error_close(ws, "boom", code=4029)
     assert ws.sent == []
+
+    ws = FakeWebSocket(close_raises=True)
+    error_close(ws, "boom")
+    assert len(ws.sent) == 1
 
 
 # ---------- slot accounting ----------

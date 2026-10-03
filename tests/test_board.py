@@ -162,22 +162,11 @@ def test_attach_page_includes_kill_control():
     assert "work" in html
 
 
-def test_attach_page_kill_posts_name_and_confirm():
+def test_attach_page_renders_killed_banner_hidden():
     app, _ = _app(lambda r: Principal(name="admin"))
     client = app.test_client()
     html = client.get("/mux/local/alice/work/attach").get_data(as_text=True)
-    assert "var SESSION_NAME = " in html
-    assert '"work"' in html
-    assert "body.set('name', SESSION_NAME)" in html
-    assert "body.set('confirm', SESSION_NAME)" in html
-
-
-def test_attach_page_kill_success_closes_or_shows_killed_state():
-    app, _ = _app(lambda r: Principal(name="admin"))
-    client = app.test_client()
-    html = client.get("/mux/local/alice/work/attach").get_data(as_text=True)
-    assert "window.close()" in html
-    assert 'id="mb-killed"' in html
+    assert '<div id="mb-killed" hidden>' in html
     assert "session killed" in html.lower()
 
 
@@ -220,14 +209,20 @@ def test_attach_page_has_copy_control():
     assert 'data-mb-osc52="off"' in html
 
 
-def test_attach_page_loads_attach_client_after_wrap_url_helper():
+def test_attach_page_loads_session_requests_then_wrap_url_then_attach_client():
     r = _attach()
     assert r.status_code == 200
     html = r.data.decode()
-    assert "muxboard/wrap-url.js" in html
-    assert "muxboard/attach.js" in html
-    assert html.index("muxboard/wrap-url.js") < html.index("muxboard/attach.js")
+    order = [html.index(f"muxboard/{name}") for name in ("sessions.js", "wrap-url.js", "attach.js")]
+    assert order == sorted(order)
     assert "addon-web-links" not in html
+
+
+def test_dashboard_loads_session_requests_before_dashboard_script():
+    app, _ = _app(lambda r: Principal(name="admin"))
+    html = app.test_client().get("/mux/").get_data(as_text=True)
+    assert "muxboard/sessions.js" in html
+    assert html.index("muxboard/sessions.js") < html.index("muxboard/muxboard.js")
 
 
 def test_attach_omits_clipboard_addon_when_osc52_off():

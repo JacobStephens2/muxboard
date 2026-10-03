@@ -423,17 +423,438 @@ function missingDeps() {
     () => attach.links({ open: () => {}, title: () => {} }),
     () => attach.links({ platform: "Linux", title: () => {} }),
     () => attach.clipboardProvider({ mode: "write", max: 1, prompt: () => {} }),
+    () => attachSession({ sessions: null }),
+    () => attachSession({ clock: { setTimeout() {}, clearTimeout() {} } }),
+    () => attachSession({ location: {} }),
   ]) {
     try { fn(); } catch (e) { threw++; }
   }
-  check("Missing dependencies fail loudly", threw === 3);
+  check("Missing dependencies fail loudly", threw === 6);
 }
 
+// Attach session controller
+
+function fakeClock() {
+  let now = 0;
+  let seq = 0;
+  const timers = new Map();
+  const clock = {
+    setTimeout(fn, ms) { const id = ++seq; timers.set(id, { fn, at: now + ms }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    setInterval(fn, ms) { const id = ++seq; timers.set(id, { fn, at: now + ms, every: ms }); return id; },
+    advance(ms) {
+      const end = now + ms;
+      for (;;) {
+        let next = null;
+        for (const [id, t] of timers) {
+          if (t.at <= end && (!next || t.at < next[1].at)) next = [id, t];
+        }
+        if (!next) break;
+        const [id, t] = next;
+        now = t.at;
+        if (t.every) t.at += t.every; else timers.delete(id);
+        t.fn();
+      }
+      now = end;
+    },
+  };
+  return clock;
+}
+
+function fakeSocket() {
+  const handlers = {};
+  const sock = {
+    url: null,
+    binaryType: "blob",
+    sent: [],
+    closed: 0,
+    addEventListener(type, fn) { (handlers[type] = handlers[type] || []).push(fn); },
+    send(data) { sock.sent.push(JSON.parse(data)); },
+    close() { sock.closed++; },
+    emit(type, ev) { (handlers[type] || []).forEach((fn) => fn(ev || {})); },
+  };
+  return sock;
+}
+
+function fakeSessionTerm(selection) {
+  const t = {
+    cols: 80,
+    rows: 24,
+    selection: selection || "",
+    written: [],
+    focused: 0,
+    dataFn: null,
+    selFn: null,
+    keyFn: null,
+    write(d) { t.written.push(d); },
+    writeln(d) { t.written.push(d + "\n"); },
+    focus() { t.focused++; },
+    onData(fn) { t.dataFn = fn; },
+    onSelectionChange(fn) { t.selFn = fn; },
+    attachCustomKeyEventHandler(fn) { t.keyFn = fn; },
+    hasSelection() { return !!t.selection; },
+    getSelection() { return t.selection; },
+  };
+  return t;
+}
+
+function fakeView() {
+  const v = {
+    statuses: [],
+    busy: [],
+    errors: [],
+    killedCalls: 0,
+    copyStates: [],
+    status(state, text) { v.statuses.push([state, text]); },
+    killBusy(b) { v.busy.push(b); },
+    killError(msg) { v.errors.push(msg); },
+    killed() { v.killedCalls++; },
+    copyButton(state) { v.copyStates.push(state); },
+    get last() { return v.statuses[v.statuses.length - 1]; },
+  };
+  return v;
+}
+
+function fakeSessions(outcome) {
+  const s = {
+    calls: [],
+    kill(target) { s.calls.push(target); return Promise.resolve(outcome || { ok: true }); },
+  };
+  return s;
+}
+
+function attachSession(over) {
+  const o = over || {};
+  const env = {
+    target: o.target || { host: "web 1", user: "al/ice", name: "my work" },
+    base: "/mux",
+    location: o.location || { protocol: "https:", host: "board.example:8443" },
+    socket: (url) => { env.sock = fakeSocket(); env.sock.url = url; return env.sock; },
+    term: o.term || fakeSessionTerm(),
+    fit: () => { env.fits++; },
+    clipboard: o.clipboard || fakeClipboard(),
+    sessions: "sessions" in o ? o.sessions : fakeSessions(),
+    confirm: (msg) => { env.confirms.push(msg); return o.confirm !== false; },
+    closeWindow: () => { env.order.push("closeWindow"); },
+    timers: o.clock || fakeClock(),
+    view: o.view || fakeView(),
+    fits: 0,
+    confirms: [],
+    order: [],
+  };
+  const origKilled = env.view.killed;
+  env.view.killed = () => { env.order.push("killed"); origKilled(); };
+  env.session = attach.session(env);
+  return env;
+}
+
+function lifecycleCases() {
+  {
+    const env = attachSession();
+    env.session.start();
+    check(
+      "Session: socket URL is wss on https, segments encoded",
+      env.sock.url === "wss://board.example:8443/mux/ws/web%201/al%2Fice/my%20work",
+      env.sock.url
+    );
+    check("Session: socket receives ArrayBuffer frames", env.sock.binaryType === "arraybuffer");
+    check(
+      "Session: status starts connecting",
+      env.view.last[0] === "connecting" && env.view.last[1] === "connecting..."
+    );
+  }
+  {
+    const env = attachSession({ location: { protocol: "http:", host: "localhost:5000" } });
+    env.session.start();
+    check("Session: socket URL is ws on http", env.sock.url.startsWith("ws://localhost:5000/mux/ws/"));
+  }
+  {
+    const env = attachSession();
+    env.session.start();
+    env.sock.emit("open");
+    check("Session: open reports connected", env.view.last.join() === "open,connected");
+    check(
+      "Session: open sends a fitted resize and focuses the terminal",
+      env.sock.sent.length === 1 &&
+        env.sock.sent[0].type === "resize" &&
+        env.sock.sent[0].cols === 80 &&
+        env.sock.sent[0].rows === 24 &&
+        env.fits === 1 &&
+        env.term.focused === 1
+    );
+    env.sock.emit("close", { code: 1006 });
+    check("Session: close reports disconnected with code", env.view.last.join() === "closed,disconnected (1006)");
+    check(
+      "Session: close writes the bridge closed line",
+      env.term.written.some((w) => w.includes("[bridge closed]"))
+    );
+  }
+  {
+    const env = attachSession();
+    env.session.start();
+    env.sock.emit("close", { code: 0 });
+    check("Session: close without code reports disconnected", env.view.last.join() === "closed,disconnected");
+    env.sock.emit("error");
+    check("Session: error reports connection error", env.view.last.join() === "error,connection error");
+  }
+}
+
+async function frameCases() {
+  const env = attachSession();
+  env.session.start();
+  env.sock.emit("open");
+  env.sock.emit("message", { data: new Uint8Array([104, 105]).buffer });
+  env.sock.emit("message", { data: "plain" });
+  env.sock.emit("message", { data: JSON.stringify({ type: "error", message: "boom" }) });
+  env.sock.emit("message", { data: { arrayBuffer: () => Promise.resolve(new Uint8Array([7]).buffer) } });
+  await new Promise((r) => setImmediate(r));
+  const w = env.term.written;
+  check("Session: bytes frames are written", w[0] instanceof Uint8Array && w[0][0] === 104);
+  check("Session: text frames are written", w[1] === "plain");
+  check(
+    "Session: bridge error frames are written in red",
+    typeof w[2] === "string" && w[2].includes("\x1b[31m[bridge error] boom")
+  );
+  check("Session: Blob frames are written", w[3] instanceof Uint8Array && w[3][0] === 7);
+}
+
+function inputCases() {
+  {
+    const env = attachSession();
+    env.session.start();
+    env.term.dataFn("x");
+    check("Session: input before open is dropped", env.sock.sent.length === 0);
+    env.sock.emit("open");
+    env.term.dataFn("ls\r");
+    const last = env.sock.sent[env.sock.sent.length - 1];
+    check("Session: input while connected is sent", last.type === "input" && last.data === "ls\r");
+    env.sock.emit("close", { code: 1000 });
+    const n = env.sock.sent.length;
+    env.term.dataFn("y");
+    check("Session: input after close is dropped", env.sock.sent.length === n);
+  }
+  {
+    const clock = fakeClock();
+    const env = attachSession({ clock });
+    env.session.start();
+    env.sock.emit("open");
+    const n = env.sock.sent.length;
+    env.session.resize();
+    clock.advance(50);
+    env.session.resize();
+    clock.advance(79);
+    check("Session: resize is debounced", env.sock.sent.length === n);
+    clock.advance(1);
+    check(
+      "Session: one resize is sent 80 ms after the last",
+      env.sock.sent.length === n + 1 && env.sock.sent[n].type === "resize"
+    );
+    env.sock.emit("close", { code: 1000 });
+    env.session.resize();
+    clock.advance(80);
+    check("Session: resize while disconnected is not sent", env.sock.sent.length === n + 1);
+  }
+  {
+    const clock = fakeClock();
+    const env = attachSession({ clock });
+    env.session.start();
+    clock.advance(30000);
+    check("Session: no ping before connected", env.sock.sent.length === 0);
+    env.sock.emit("open");
+    const n = env.sock.sent.length;
+    clock.advance(29999);
+    check("Session: no ping before 30 s", env.sock.sent.length === n);
+    clock.advance(1);
+    check("Session: ping every 30 s while connected", env.sock.sent[n] && env.sock.sent[n].type === "ping");
+    env.sock.emit("close", { code: 1000 });
+    clock.advance(60000);
+    check("Session: no ping after close", env.sock.sent.length === n + 1);
+  }
+}
+
+async function killCases() {
+  {
+    const sessions = fakeSessions();
+    const env = attachSession({ sessions, confirm: false });
+    env.session.start();
+    env.sock.emit("open");
+    await env.session.kill();
+    check("Kill: asks to confirm with the Session name", env.confirms[0] === "Kill session my work?");
+    check(
+      "Kill: cancel does nothing",
+      sessions.calls.length === 0 && env.view.busy.length === 0 && env.view.errors.length === 0
+    );
+  }
+  {
+    const sessions = fakeSessions({ ok: false, error: "HTTP 403" });
+    const env = attachSession({ sessions });
+    env.session.start();
+    env.sock.emit("open");
+    await env.session.kill();
+    check(
+      "Kill: clears the previous error and marks busy before the request",
+      env.view.errors[0] === null && env.view.busy[0] === true
+    );
+    check(
+      "Kill: requests the target Session",
+      sessions.calls.length === 1 &&
+        sessions.calls[0].host === "web 1" &&
+        sessions.calls[0].user === "al/ice" &&
+        sessions.calls[0].name === "my work"
+    );
+    check("Kill: failure shows the error", env.view.errors[1] === "HTTP 403");
+    check("Kill: failure sets status kill failed", env.view.last.join() === "error,kill failed");
+    check("Kill: failure re-enables Kill", env.view.busy[1] === false);
+    check("Kill: failure does not close the window", env.order.length === 0);
+  }
+  {
+    const env = attachSession();
+    env.session.start();
+    env.sock.emit("open");
+    await env.session.kill();
+    check("Kill: success closes the window, then renders killed", env.order.join() === "closeWindow,killed");
+    check("Kill: success closes the socket", env.sock.closed === 1);
+    check("Kill: success sets status session killed", env.view.last.join() === "closed,session killed");
+    check("Kill: success leaves Kill disabled", !env.view.busy.includes(false));
+    const n = env.view.statuses.length;
+    env.sock.emit("close", { code: 1006 });
+    env.sock.emit("error");
+    check(
+      "Killed: close and error change nothing",
+      env.view.statuses.length === n && !env.term.written.some((w) => String(w).includes("[bridge closed]"))
+    );
+    env.session.flash("clipboard: 3 B from session");
+    check("Killed: flash is suppressed", env.view.statuses.length === n);
+    const sent = env.sock.sent.length;
+    env.term.dataFn("x");
+    check("Killed: input is not sent", env.sock.sent.length === sent);
+  }
+  {
+    // Kill succeeds before the socket ever opens.
+    const env = attachSession();
+    env.session.start();
+    await env.session.kill();
+    const n = env.view.statuses.length;
+    env.sock.emit("open");
+    check(
+      "Killed: a later open closes the socket instead of connecting",
+      env.sock.closed === 2 && env.view.statuses.length === n && env.term.focused === 0
+    );
+  }
+}
+
+function flashCases() {
+  {
+    const clock = fakeClock();
+    const env = attachSession({ clock });
+    env.session.start();
+    env.sock.emit("open");
+    env.session.flash("clipboard: 3 B from session");
+    check(
+      "Flash: shows the message in the current state",
+      env.view.last.join() === "open,clipboard: 3 B from session"
+    );
+    clock.advance(2000);
+    env.session.flash("copy failed");
+    clock.advance(2499);
+    check("Flash: a new flash restarts the 2.5 s timer", env.view.last.join() === "open,copy failed");
+    clock.advance(1);
+    check("Flash: restores connected after 2.5 s", env.view.last.join() === "open,connected");
+  }
+  {
+    const clock = fakeClock();
+    const env = attachSession({ clock });
+    env.session.start();
+    env.sock.emit("open");
+    env.session.flash("copy failed");
+    env.sock.emit("close", { code: 1006 });
+    clock.advance(2500);
+    check("Flash: does not restore connected once disconnected", env.view.last.join() === "closed,disconnected (1006)");
+  }
+}
+
+function lastCopy(env) {
+  return env.view.copyStates[env.view.copyStates.length - 1];
+}
+
+async function copyFeedbackCases() {
+  {
+    const env = attachSession();
+    check(
+      "Copy button: disabled with nothing selected",
+      lastCopy(env).disabled === true &&
+        lastCopy(env).title === "nothing selected" &&
+        lastCopy(env).label === "Copy"
+    );
+    env.term.selection = "hello";
+    env.term.selFn();
+    check(
+      "Copy button: enabled with a Selection",
+      lastCopy(env).disabled === false && lastCopy(env).title === "" && lastCopy(env).label === "Copy"
+    );
+  }
+  {
+    const clock = fakeClock();
+    const clip = fakeClipboard();
+    const term = fakeSessionTerm("hello");
+    const env = attachSession({ clock, clipboard: clip, term });
+    await env.session.copy();
+    check("Copy: writes the Selection", clip.writes[0] === "hello");
+    check("Copy: shows Copied", lastCopy(env).label === "Copied" && lastCopy(env).disabled === false);
+    term.selection = "";
+    term.selFn();
+    check("Copy: Copied stays while the selection changes", lastCopy(env).label === "Copied" && lastCopy(env).disabled === true);
+    clock.advance(1499);
+    check("Copy: Copied lasts 1.5 s", lastCopy(env).label === "Copied");
+    clock.advance(1);
+    check(
+      "Copy: label returns to Copy after 1.5 s",
+      lastCopy(env).label === "Copy" && lastCopy(env).disabled === true && lastCopy(env).title === "nothing selected"
+    );
+  }
+  {
+    const term = fakeSessionTerm("hello");
+    const env = attachSession({ term, clipboard: fakeClipboard("", { failWrite: true }) });
+    env.session.start();
+    env.sock.emit("open");
+    await env.session.copy();
+    check("Copy: failure flashes copy failed", env.view.last.join() === "open,copy failed");
+  }
+  {
+    const term = fakeSessionTerm("");
+    const env = attachSession({ term });
+    const n = env.view.copyStates.length;
+    await env.session.copy();
+    check("Copy: empty Selection changes nothing", env.view.copyStates.length === n && env.view.statuses.length === 0);
+  }
+  {
+    const clip = fakeClipboard();
+    const term = fakeSessionTerm("hello");
+    const env = attachSession({ term, clipboard: clip });
+    let prevented = 0;
+    const ev = { type: "keydown", ctrlKey: true, key: "c", preventDefault() { prevented++; } };
+    const passed = term.keyFn(ev);
+    await new Promise((r) => setImmediate(r));
+    check(
+      "Copy chord: copies the Selection and stops the key",
+      passed === false && prevented === 1 && clip.writes[0] === "hello"
+    );
+    term.selection = "";
+    check("Copy chord: without a Selection the key reaches the Session", term.keyFn(ev) === true);
+  }
+}
+
+lifecycleCases();
+inputCases();
+flashCases();
 chordCases();
 wireCases();
 missingDeps();
 await copyCases();
 await clipboardCases();
 await blobCase();
+await frameCases();
+await killCases();
+await copyFeedbackCases();
 
 process.exit(failed ? 1 : 0);

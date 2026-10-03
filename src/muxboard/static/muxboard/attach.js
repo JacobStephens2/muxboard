@@ -1,9 +1,11 @@
 /* Attach client: the Attach page's Link, Copy and Clipboard rules
- * (ADR-0001, ADR-0002) and the client half of the bridge wire protocol.
+ * (ADR-0001, ADR-0002), the client half of the bridge wire protocol, and
+ * the Attach session controller that owns the page's behaviour.
  *
- * The page wires DOM, xterm and the WebSocket to this module. Everything
- * the module needs from the browser (platform, open, clipboard, prompt,
- * notify) is passed in, so Node tests drive it with fakes. Regex Links and
+ * The page builds DOM, xterm and its addons and hands them to this module.
+ * Everything the module needs from the browser (platform, open, clipboard,
+ * prompt, socket, timers, view callbacks) is passed in, so Node tests drive
+ * it with fakes. Regex Links and
  * the Copy join come from wrap-url.js, which the page loads first.
  */
 (function (root, factory) {
@@ -18,7 +20,7 @@
   if (!wrap) throw new Error("mbAttach: wrap-url.js must load first");
 
   function requireDep(env, name, type) {
-    if (!env || typeof env[name] !== type) {
+    if (!env || typeof env[name] !== type || env[name] === null) {
       throw new TypeError("mbAttach: " + name + " must be a " + type);
     }
     return env[name];
@@ -182,7 +184,209 @@
     return null;
   }
 
+  // Attach session: the page's connection lifecycle, input, Kill, status
+  // flash and Copy feedback. The page builds xterm and the DOM and passes
+  // them in with the socket factory, timers and view callbacks.
+  function session(env) {
+    var target = env && env.target;
+    if (!target || typeof target.name !== "string") {
+      throw new TypeError("mbAttach: target must have a Session name");
+    }
+    var base = requireDep(env, "base", "string");
+    var location = env.location;
+    if (!location || typeof location.host !== "string") {
+      throw new TypeError("mbAttach: location must have a host");
+    }
+    var openSocket = requireDep(env, "socket", "function");
+    var term = requireDep(env, "term", "object");
+    var fit = requireDep(env, "fit", "function");
+    var timers = requireDep(env, "timers", "object");
+    var setTimeoutFn = requireDep(timers, "setTimeout", "function");
+    var clearTimeoutFn = requireDep(timers, "clearTimeout", "function");
+    var setIntervalFn = requireDep(timers, "setInterval", "function");
+    var sessions = requireDep(env, "sessions", "object");
+    var confirm = requireDep(env, "confirm", "function");
+    var closeWindow = requireDep(env, "closeWindow", "function");
+    var view = requireDep(env, "view", "object");
+    var clipboard = env.clipboard;
+
+    var ws = null;
+    var connected = false;
+    var killed = false;
+    var state = "connecting";
+    var resizeTimer = null;
+    var flashTimer = null;
+    var copiedTimer = null;
+
+    function socketUrl() {
+      var proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + base +
+        "/ws/" + encodeURIComponent(target.host) +
+        "/" + encodeURIComponent(target.user) +
+        "/" + encodeURIComponent(target.name);
+    }
+
+    function setStatus(next, text) {
+      state = next;
+      view.status(next, text);
+    }
+
+    // Show a message, then restore "connected" only if still connected.
+    function flash(text) {
+      if (killed) return;
+      if (flashTimer) clearTimeoutFn(flashTimer);
+      setStatus(state, text);
+      flashTimer = setTimeoutFn(function () {
+        flashTimer = null;
+        if (connected) setStatus("open", "connected");
+      }, 2500);
+    }
+
+    function closeSocket() {
+      try { if (ws) ws.close(); } catch (e) { /* already closed */ }
+    }
+
+    function renderKilled() {
+      killed = true;
+      connected = false;
+      closeSocket();
+      setStatus("closed", "session killed");
+      view.killError(null);
+      view.killed();
+    }
+
+    // Kill: resolves once the outcome is rendered. A browser refuses
+    // closeWindow on a tab it did not open, so the killed state renders too.
+    function kill() {
+      if (!confirm("Kill session " + target.name + "?")) return Promise.resolve();
+      view.killError(null);
+      view.killBusy(true);
+      return sessions.kill(target).then(function (out) {
+        if (!out.ok) {
+          view.killError(out.error);
+          setStatus("error", "kill failed");
+          view.killBusy(false);
+          return;
+        }
+        closeWindow();
+        renderKilled();
+      });
+    }
+
+    function sendResize() {
+      if (!connected) return;
+      fit();
+      ws.send(encodeResize(term.cols, term.rows));
+    }
+
+    function onMessage(ev) {
+      var frame = decode(ev.data);
+      if (!frame) return;
+      if (frame.type === "bytes") {
+        term.write(frame.bytes);
+      } else if (frame.type === "error") {
+        term.writeln("\r\n\x1b[31m[bridge error] " + frame.message + "\x1b[0m");
+      } else if (frame.type === "text") {
+        term.write(frame.text);
+      } else if (frame.type === "blob") {
+        frame.bytes.then(function (bytes) { term.write(bytes); });
+      }
+    }
+
+    function syncCopyButton() {
+      var has = term.hasSelection();
+      view.copyButton({
+        disabled: !has,
+        title: has ? "" : "nothing selected",
+        label: copiedTimer ? "Copied" : "Copy",
+      });
+    }
+
+    function showCopied() {
+      if (copiedTimer) clearTimeoutFn(copiedTimer);
+      copiedTimer = setTimeoutFn(function () {
+        copiedTimer = null;
+        syncCopyButton();
+      }, 1500);
+      syncCopyButton();
+    }
+
+    // Copy: resolves once the outcome is rendered.
+    function doCopy() {
+      return copy(term, clipboard).then(function (outcome) {
+        if (outcome === "copied") showCopied();
+        else if (outcome === "failed") flash("copy failed");
+      });
+    }
+
+    syncCopyButton();
+    term.onSelectionChange(function () { syncCopyButton(); });
+    term.attachCustomKeyEventHandler(function (ev) {
+      if (isCopyChord(ev, term.hasSelection())) {
+        ev.preventDefault();
+        doCopy();
+        return false;
+      }
+      return true;
+    });
+
+    term.onData(function (data) {
+      if (!connected) return;
+      ws.send(encodeInput(data));
+    });
+
+    function start() {
+      setStatus("connecting", "connecting...");
+      ws = openSocket(socketUrl());
+      ws.binaryType = "arraybuffer";
+
+      ws.addEventListener("open", function () {
+        if (killed) {
+          closeSocket();
+          return;
+        }
+        connected = true;
+        setStatus("open", "connected");
+        sendResize();
+        term.focus();
+      });
+      ws.addEventListener("message", onMessage);
+      ws.addEventListener("close", function (ev) {
+        connected = false;
+        if (killed) return;
+        setStatus("closed", "disconnected" + (ev.code ? " (" + ev.code + ")" : ""));
+        term.writeln("\r\n\x1b[33m[bridge closed]\x1b[0m");
+      });
+      ws.addEventListener("error", function () {
+        if (killed) return;
+        setStatus("error", "connection error");
+      });
+
+      setIntervalFn(function () {
+        if (connected) { try { ws.send(encodePing()); } catch (e) { /* closing */ } }
+      }, 30000);
+    }
+
+    // Window resize: debounced; sent only while connected.
+    function resize() {
+      if (resizeTimer) clearTimeoutFn(resizeTimer);
+      resizeTimer = setTimeoutFn(function () {
+        resizeTimer = null;
+        sendResize();
+      }, 80);
+    }
+
+    return {
+      start: start,
+      resize: resize,
+      kill: kill,
+      flash: flash,
+      copy: doCopy,
+    };
+  }
+
   return {
+    session: session,
     links: links,
     copy: copy,
     isCopyChord: isCopyChord,

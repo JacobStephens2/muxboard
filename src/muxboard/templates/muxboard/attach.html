@@ -42,6 +42,7 @@
 
   <script src="{{ xterm.js }}"></script>
   <script src="{{ xterm.fit }}"></script>
+  <script src="{{ url_for('muxboard.static', filename='muxboard/sessions.js') }}"></script>
   <script src="{{ url_for('muxboard.static', filename='muxboard/wrap-url.js') }}"></script>
   <script src="{{ url_for('muxboard.static', filename='muxboard/attach.js') }}"></script>
   {% if osc52 != "off" %}
@@ -53,90 +54,15 @@
 
     var attachClient = window.mbAttach;
     var BASE = {{ base | tojson }};
-    var HOST_KEY = {{ host_key | tojson }};
-    var TMUX_USER = {{ tmux_user | tojson }};
-    var SESSION_NAME = {{ session_name | tojson }};
     var OSC52 = document.body.getAttribute('data-mb-osc52') || 'off';
     var OSC52_MAX = parseInt(document.body.getAttribute('data-mb-osc52-max') || '0', 10);
 
     var statusEl = document.getElementById('mb-status');
     var termEl = document.getElementById('mb-terminal');
     var copyBtn = document.querySelector('[data-mb-copy]');
-    var statusRestore = null;
-    var copiedTimer = null;
     var killBtn = document.querySelector('[data-mb-attach-kill]');
     var killErr = document.getElementById('mb-kill-error');
-    var ws = null;
-    var connected = false;
-    var killed = false;
-
-    function setStatus(state, msg) {
-      statusEl.dataset.state = state;
-      statusEl.textContent = msg;
-    }
-
-    function flashStatus(msg) {
-      if (killed) return;
-      if (statusRestore) clearTimeout(statusRestore);
-      setStatus(statusEl.dataset.state, msg);
-      statusRestore = setTimeout(function () {
-        statusRestore = null;
-        if (connected) setStatus('open', 'connected');
-      }, 2500);
-    }
-
-    function showKillError(msg) {
-      if (killErr) {
-        killErr.hidden = false;
-        killErr.textContent = msg;
-      }
-      setStatus('error', 'kill failed');
-      if (killBtn) killBtn.disabled = false;
-    }
-
-    function showKilledState() {
-      killed = true;
-      connected = false;
-      try { if (ws) ws.close(); } catch (e) {}
-      setStatus('closed', 'session killed');
-      if (killErr) { killErr.hidden = true; killErr.textContent = ''; }
-      var banner = document.getElementById('mb-killed');
-      if (banner) banner.hidden = false;
-      if (termEl) termEl.hidden = true;
-      document.body.classList.add('mb-attach-killed');
-      if (killBtn) killBtn.disabled = true;
-    }
-
-    if (killBtn) {
-      killBtn.addEventListener('click', function () {
-        if (!window.confirm('Kill session ' + SESSION_NAME + '?')) return;
-        if (killErr) { killErr.hidden = true; killErr.textContent = ''; }
-        killBtn.disabled = true;
-        var body = new URLSearchParams();
-        body.set('name', SESSION_NAME);
-        body.set('confirm', SESSION_NAME);
-        fetch(BASE + '/api/' + encodeURIComponent(HOST_KEY) + '/' +
-              encodeURIComponent(TMUX_USER) + '/kill', {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString(),
-        })
-          .then(function (r) {
-            return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-          })
-          .then(function (res) {
-            if (!res.ok || !res.body.ok) {
-              showKillError((res.body && res.body.error) || 'failed');
-              return;
-            }
-            window.close();
-            showKilledState();
-          })
-          .catch(function (e) {
-            showKillError(String(e));
-          });
-      });
-    }
+    var killedBanner = document.getElementById('mb-killed');
 
     var term = new window.Terminal({
       cursorBlink: true,
@@ -161,49 +87,59 @@
 
     term.registerLinkProvider(links.provider(term));
 
-    function syncCopyBtn() {
-      if (!copyBtn) return;
-      var has = term.hasSelection();
-      copyBtn.disabled = !has;
-      copyBtn.title = has ? '' : 'nothing selected';
-      if (copiedTimer) return;
-      copyBtn.textContent = 'Copy';
-    }
+    var session = attachClient.session({
+      target: {
+        host: {{ host_key | tojson }},
+        user: {{ tmux_user | tojson }},
+        name: {{ session_name | tojson }},
+      },
+      base: BASE,
+      location: { protocol: window.location.protocol, host: window.location.host },
+      socket: function (url) { return new WebSocket(url); },
+      term: term,
+      fit: function () { fitAddon.fit(); },
+      clipboard: navigator.clipboard,
+      sessions: window.mbSessions.client({ fetch: window.fetch.bind(window), base: BASE }),
+      confirm: function (msg) { return window.confirm(msg); },
+      closeWindow: function () { window.close(); },
+      timers: {
+        setTimeout: window.setTimeout.bind(window),
+        clearTimeout: window.clearTimeout.bind(window),
+        setInterval: window.setInterval.bind(window),
+      },
+      view: {
+        status: function (state, text) {
+          statusEl.dataset.state = state;
+          statusEl.textContent = text;
+        },
+        killBusy: function (busy) { if (killBtn) killBtn.disabled = busy; },
+        killError: function (msg) {
+          if (!killErr) return;
+          killErr.hidden = msg === null;
+          killErr.textContent = msg || '';
+        },
+        killed: function () {
+          if (killedBanner) killedBanner.hidden = false;
+          termEl.hidden = true;
+          document.body.classList.add('mb-attach-killed');
+          if (killBtn) killBtn.disabled = true;
+        },
+        copyButton: function (state) {
+          if (!copyBtn) return;
+          copyBtn.disabled = state.disabled;
+          copyBtn.title = state.title;
+          copyBtn.textContent = state.label;
+        },
+      },
+    });
 
-    function showCopied() {
-      if (!copyBtn) return;
-      copyBtn.textContent = 'Copied';
-      copyBtn.disabled = !term.hasSelection();
-      if (copiedTimer) clearTimeout(copiedTimer);
-      copiedTimer = setTimeout(function () {
-        copiedTimer = null;
-        syncCopyBtn();
-      }, 1500);
-    }
-
-    function doCopy() {
-      attachClient.copy(term, navigator.clipboard).then(function (outcome) {
-        if (outcome === 'copied') showCopied();
-        else if (outcome === 'failed') flashStatus('copy failed');
-      });
-    }
-
+    if (killBtn) killBtn.addEventListener('click', function () { session.kill(); });
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
-        doCopy();
+        session.copy();
         term.focus();
       });
     }
-    term.onSelectionChange(syncCopyBtn);
-
-    term.attachCustomKeyEventHandler(function (ev) {
-      if (attachClient.isCopyChord(ev, term.hasSelection())) {
-        ev.preventDefault();
-        doCopy();
-        return false;
-      }
-      return true;
-    });
 
     function promptClipQuery() {
       var dlg = document.querySelector('[data-mb-clip-query]');
@@ -237,77 +173,13 @@
         max: OSC52_MAX,
         prompt: promptClipQuery,
         clipboard: navigator.clipboard,
-        notify: flashStatus,
+        notify: session.flash,
       });
       term.loadAddon(new window.ClipboardAddon.ClipboardAddon(undefined, provider));
     }
 
-    var wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = wsProto + '//' + window.location.host + BASE +
-                '/ws/' + encodeURIComponent(HOST_KEY) +
-                '/' + encodeURIComponent(TMUX_USER) +
-                '/' + encodeURIComponent(SESSION_NAME);
-
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-
-    ws.addEventListener('open', function () {
-      if (killed) {
-        try { ws.close(); } catch (e) {}
-        return;
-      }
-      connected = true;
-      setStatus('open', 'connected');
-      sendResize();
-      term.focus();
-    });
-
-    ws.addEventListener('message', function (ev) {
-      var frame = attachClient.decode(ev.data);
-      if (!frame) return;
-      if (frame.type === 'bytes') {
-        term.write(frame.bytes);
-      } else if (frame.type === 'error') {
-        term.writeln('\r\n\x1b[31m[bridge error] ' + frame.message + '\x1b[0m');
-      } else if (frame.type === 'text') {
-        term.write(frame.text);
-      } else if (frame.type === 'blob') {
-        frame.bytes.then(function (bytes) { term.write(bytes); });
-      }
-    });
-
-    ws.addEventListener('close', function (ev) {
-      connected = false;
-      if (killed) return;
-      setStatus('closed', 'disconnected' + (ev.code ? (' (' + ev.code + ')') : ''));
-      term.writeln('\r\n\x1b[33m[bridge closed]\x1b[0m');
-    });
-
-    ws.addEventListener('error', function () {
-      if (killed) return;
-      setStatus('error', 'connection error');
-    });
-
-    term.onData(function (data) {
-      if (!connected) return;
-      ws.send(attachClient.encodeInput(data));
-    });
-
-    function sendResize() {
-      if (!connected) return;
-      fitAddon.fit();
-      ws.send(attachClient.encodeResize(term.cols, term.rows));
-    }
-
-    var resizeT = null;
-    window.addEventListener('resize', function () {
-      if (resizeT) clearTimeout(resizeT);
-      resizeT = setTimeout(sendResize, 80);
-    });
-
-    setInterval(function () {
-      if (connected) { try { ws.send(attachClient.encodePing()); } catch (e) {} }
-    }, 30000);
+    window.addEventListener('resize', session.resize);
+    session.start();
   })();
   </script>
 </body>

@@ -38,6 +38,7 @@ from flask import (
 
 from .auth import Authorizer, Principal, deny_all
 from .inventory import Host
+from .sweep import Sweep
 from .tmuxctl import TmuxController
 from .ttyproxy import AttachCapacityExceeded, SlotManager, bridge, error_close
 
@@ -124,9 +125,9 @@ class Muxboard:
             hosts,
             ssh_key=ssh_key,
             ssh_timeout=ssh_timeout,
-            interval=sweep_interval,
             strict_host_key_checking=strict_host_key_checking,
         )
+        self.sweep = Sweep(hosts, self.controller.list_host, sweep_interval)
         self.authorize = authorize
         self.slots = SlotManager(
             max_per_user=attach_max_per_user, max_global=attach_max_global
@@ -161,32 +162,11 @@ class Muxboard:
             log.exception("muxboard: authorize callable raised; denying")
             return None
 
-    def _filter_snapshot(self, snap: dict[str, Any], principal: Principal) -> dict[str, Any]:
-        if principal.allowed_users is None:
-            return snap
-        allowed = principal.allowed_users
-        hosts = []
-        for h in snap.get("hosts", []):
-            result = h.get("result")
-            if result:
-                result = {
-                    **result,
-                    "sessions": {u: v for u, v in (result.get("sessions") or {}).items() if u in allowed},
-                    "errors": {u: v for u, v in (result.get("errors") or {}).items() if u in allowed},
-                    "users": [u for u in (result.get("users") or []) if u in allowed],
-                }
-            hosts.append({
-                **h,
-                "users": [u for u in h.get("users", []) if u in allowed],
-                "result": result,
-            })
-        return {**snap, "hosts": hosts}
-
     # ---------- lifecycle ----------
 
     def start(self) -> None:
         """Start the background sweep thread. Call once after init_app."""
-        self.controller.start_background_loop()
+        self.sweep.start()
 
     def init_app(self, app: Flask, url_prefix: str = "/muxboard") -> None:
         self._url_prefix = url_prefix.rstrip("/") or ""
@@ -219,10 +199,9 @@ class Muxboard:
             principal = self._principal(request)
             if principal is None:
                 abort(401)
-            snap = self._filter_snapshot(self.controller.snapshot(), principal)
             return render_template(
                 "muxboard/dashboard.html",
-                snapshot=snap,
+                snapshot=self.sweep.view(principal),
                 base=self._url_prefix,
                 principal=principal,
                 home_url=self.home_url,
@@ -234,7 +213,7 @@ class Muxboard:
             principal = self._principal(request)
             if principal is None:
                 abort(401)
-            return jsonify(self._filter_snapshot(self.controller.snapshot(), principal))
+            return jsonify(self.sweep.view(principal))
 
         @bp.route("/api/refresh", methods=["POST"])
         def api_refresh():
@@ -243,11 +222,10 @@ class Muxboard:
                 abort(401)
             key = (request.args.get("key") or "").strip()
             if key:
-                result = self.controller.refresh_host(key)
-                if result is None:
+                if not self.sweep.refresh(key):
                     abort(404)
                 return jsonify({"ok": True, "key": key})
-            self.controller.force_sweep()
+            self.sweep.refresh()
             return jsonify({"ok": True})
 
         @bp.route("/api/<key>/<user>/kill", methods=["POST"])
@@ -269,7 +247,7 @@ class Muxboard:
                 self.controller.kill_session(host, user, name)
             except Exception as exc:  # noqa: BLE001
                 return jsonify({"ok": False, "error": str(exc)}), 400
-            self._safe_refresh(key)
+            self.sweep.refresh(key)
             self.audit("muxboard.kill", host=key, target_user=user,
                        session_name=name, by=principal.name)
             return jsonify({"ok": True})
@@ -287,7 +265,7 @@ class Muxboard:
                 self.controller.create_session(host, user, name, command)
             except Exception as exc:  # noqa: BLE001
                 return jsonify({"ok": False, "error": str(exc)}), 400
-            self._safe_refresh(key)
+            self.sweep.refresh(key)
             self.audit("muxboard.create", host=key, target_user=user,
                        session_name=name, command=command, by=principal.name)
             return jsonify({"ok": True, "name": name})
@@ -328,12 +306,6 @@ class Muxboard:
         if not principal.may_use(user):
             abort(403)
         return principal, host
-
-    def _safe_refresh(self, key: str) -> None:
-        try:
-            self.controller.refresh_host(key)
-        except Exception:  # noqa: BLE001
-            log.exception("muxboard: post-mutation refresh failed for %s", key)
 
     # ---------- WebSocket route ----------
 

@@ -24,6 +24,10 @@ _Avoid_: job, agent, tab
 The HTML list of Hosts, tmux users, and Sessions.
 _Avoid_: console (legacy URL)
 
+**Sweep**:
+The Board's periodic listing of every Host's Sessions; the Dashboard shows its latest result, never a live listing. Refresh runs one now, for every Host or for one.
+_Avoid_: poll, scan
+
 **Attach**:
 A live, interactive browser view of one Session.
 _Avoid_: terminal tab, replay, log view

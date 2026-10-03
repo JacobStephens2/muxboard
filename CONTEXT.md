@@ -57,5 +57,5 @@ The Session writes the operator's clipboard. Muxboard notices and refuses oversi
 _Avoid_: OSC 52 write, set-clipboard
 
 **Clipboard query**:
-The Session asks to read the operator's clipboard. Muxboard prompts; Allow is required. Off unless the Board turns it on.
+The Session asks to read the operator's clipboard. Muxboard prompts once per query; only Allow reads it, and dismissing the prompt denies. A query while a prompt is open is denied. Off unless the Board turns it on.
 _Avoid_: OSC 52 read, paste from browser

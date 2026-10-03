@@ -141,37 +141,11 @@
       });
     }
 
-    function promptClipQuery() {
-      var dlg = document.querySelector('[data-mb-clip-query]');
-      if (!dlg || typeof dlg.showModal !== 'function') return Promise.resolve(false);
-      return new Promise(function (resolve) {
-        var settled = false;
-        function done(ok) {
-          if (settled) return;
-          settled = true;
-          allow.removeEventListener('click', onAllow);
-          deny.removeEventListener('click', onDeny);
-          dlg.removeEventListener('close', onClose);
-          if (dlg.open) dlg.close();
-          resolve(ok);
-        }
-        function onAllow(ev) { ev.preventDefault(); done(true); }
-        function onDeny(ev) { ev.preventDefault(); done(false); }
-        function onClose() { done(false); }
-        var allow = dlg.querySelector('[data-mb-clip-allow]');
-        var deny = dlg.querySelector('[data-mb-clip-deny]');
-        allow.addEventListener('click', onAllow);
-        deny.addEventListener('click', onDeny);
-        dlg.addEventListener('close', onClose);
-        dlg.showModal();
-      });
-    }
-
     if (OSC52 !== 'off' && window.ClipboardAddon) {
       var provider = attachClient.clipboardProvider({
         mode: OSC52,
         max: OSC52_MAX,
-        prompt: promptClipQuery,
+        dialog: document.querySelector('[data-mb-clip-query]'),
         clipboard: navigator.clipboard,
         notify: session.flash,
       });

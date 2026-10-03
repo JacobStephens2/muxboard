@@ -3,7 +3,8 @@
 
   // muxboard dashboard controller: refresh, kill (modal), create (modal),
   // and relative-time formatting. The attach link is a plain <a> to the
-  // attach page; no JS needed for it.
+  // attach page; no JS needed for it. Kill and create requests go
+  // through sessions.js, which the page loads first.
 
   function $(sel, root) { return (root || document).querySelector(sel); }
   function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
@@ -11,6 +12,8 @@
   var BASE = (document.body.getAttribute('data-muxboard-base') || '').replace(/\/$/, '');
 
   function api(path) { return BASE + path; }
+
+  var sessions = window.mbSessions.client({ fetch: window.fetch.bind(window), base: BASE });
 
   // ---------- relative time ----------
 
@@ -89,28 +92,14 @@
       return;
     }
     go.disabled = true; go.textContent = 'Killing...';
-    var body = new URLSearchParams();
-    body.set('name', killCtx.name);
-    body.set('confirm', val);
-    fetch(api('/api/' + encodeURIComponent(killCtx.host) + '/' + encodeURIComponent(killCtx.user) + '/kill'), {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
-      .then(function (res) {
-        if (!res.ok || !res.body.ok) {
-          err.hidden = false;
-          err.textContent = (res.body && res.body.error) || 'failed';
-          go.disabled = false; go.textContent = 'Retry kill';
-          return;
-        }
-        closeKill(); window.location.reload();
-      })
-      .catch(function (e) {
-        err.hidden = false; err.textContent = String(e);
+    sessions.kill(killCtx).then(function (out) {
+      if (!out.ok) {
+        err.hidden = false; err.textContent = out.error;
         go.disabled = false; go.textContent = 'Retry kill';
-      });
+        return;
+      }
+      closeKill(); window.location.reload();
+    });
   }
 
   // ---------- create ----------
@@ -144,36 +133,24 @@
     var go = $('[data-mb-new-go]', newDialog);
     var name = (nameInput.value || '').trim();
     var cmd = (cmdInput.value || '').trim();
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+    var invalid = window.mbSessions.nameError(name);
+    if (invalid) {
       err.hidden = false;
-      err.textContent = 'Name must be 1-64 chars of [A-Za-z0-9_-].';
+      err.textContent = invalid;
       return;
     }
+    var target = { host: newCtx.host, user: newCtx.user, name: name };
     err.hidden = true; err.textContent = '';
     go.disabled = true; go.textContent = 'Creating...';
-    var body = new URLSearchParams();
-    body.set('name', name);
-    if (cmd) body.set('command', cmd);
-    fetch(api('/api/' + encodeURIComponent(newCtx.host) + '/' + encodeURIComponent(newCtx.user) + '/create'), {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
-      .then(function (res) {
-        if (!res.ok || !res.body.ok) {
-          err.hidden = false;
-          err.textContent = (res.body && res.body.error) || 'failed';
-          go.disabled = false; go.textContent = 'Retry create';
-          return;
-        }
-        rememberNewSession(newCtx.host, newCtx.user, (res.body && res.body.name) || name);
-        closeNew(); window.location.reload();
-      })
-      .catch(function (e) {
-        err.hidden = false; err.textContent = String(e);
+    sessions.create(target, cmd).then(function (out) {
+      if (!out.ok) {
+        err.hidden = false; err.textContent = out.error;
         go.disabled = false; go.textContent = 'Retry create';
-      });
+        return;
+      }
+      rememberNewSession(target.host, target.user, out.name);
+      closeNew(); window.location.reload();
+    });
   }
 
   // ---------- highlight the just-created session after reload ----------

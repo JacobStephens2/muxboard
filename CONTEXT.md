@@ -28,6 +28,10 @@ _Avoid_: console (legacy URL)
 A live, interactive browser view of one Session.
 _Avoid_: terminal tab, replay, log view
 
+**Kill**:
+An operator action that ends a Session on its Host. The request echoes the Session name as confirmation; a mismatch is refused.
+_Avoid_: delete, terminate, close
+
 **Selection**:
 The operator-highlighted span of text in an Attach. Muxboard owns this highlight; the browser's native text selection does not.
 _Avoid_: native selection, highlight

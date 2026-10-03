@@ -252,21 +252,82 @@ function chordCases() {
 }
 
 // Clipboard push and query
+
+// Listeners keyed by event type; dispatch calls each with a fake event.
+function fakeTarget() {
+  const listeners = {};
+  return {
+    listeners,
+    addEventListener(type, fn) {
+      (listeners[type] = listeners[type] || []).push(fn);
+    },
+    removeEventListener(type, fn) {
+      listeners[type] = (listeners[type] || []).filter((f) => f !== fn);
+    },
+    dispatch(type) {
+      for (const fn of (listeners[type] || []).slice()) fn({ preventDefault() {} });
+    },
+    count() {
+      return Object.values(listeners).reduce((n, fns) => n + fns.length, 0);
+    },
+  };
+}
+
+// The Attach page's Clipboard query dialog: showModal opens, close fires
+// "close" as the browser does (Escape included).
+function fakeDialog() {
+  const allow = fakeTarget();
+  const deny = fakeTarget();
+  const dlg = Object.assign(fakeTarget(), {
+    open: false,
+    shows: 0,
+    allow,
+    deny,
+    showModal() {
+      dlg.shows++;
+      dlg.open = true;
+    },
+    close() {
+      if (!dlg.open) return;
+      dlg.open = false;
+      dlg.dispatch("close");
+    },
+    querySelector(sel) {
+      if (sel === "[data-mb-clip-allow]") return allow;
+      if (sel === "[data-mb-clip-deny]") return deny;
+      return null;
+    },
+    listenerCount() {
+      return dlg.count() + allow.count() + deny.count();
+    },
+  });
+  return dlg;
+}
+
 function provider(opts) {
   const notes = [];
-  const prompts = [];
   const clip = "clipboard" in opts ? opts.clipboard : fakeClipboard(opts.clipText || "");
+  const dialog = "dialog" in opts ? opts.dialog : fakeDialog();
   const p = attach.clipboardProvider({
     mode: opts.mode,
     max: opts.max == null ? 65536 : opts.max,
-    prompt: () => {
-      prompts.push(1);
-      return Promise.resolve(!!opts.allow);
-    },
+    dialog: dialog,
     clipboard: clip,
     notify: (m) => notes.push(m),
   });
-  return { p, notes, prompts, clip };
+  return { p, notes, clip, dialog };
+}
+
+// Let a pending readText run up to (or past) its prompt.
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function settled(promise) {
+  return promise.then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error })
+  );
 }
 
 async function rejects(promise) {
@@ -308,7 +369,7 @@ async function clipboardCases() {
       "Push: over the cap in multi-byte UTF-8 is refused with no write",
       clip.writes.length === 0 &&
         notes.length === 1 &&
-        notes[0] === "clipboard: refused (9 B > 64 KiB)",
+        notes[0] === "clipboard: refused (9 B > 8 B)",
       JSON.stringify(notes)
     );
   }
@@ -326,8 +387,7 @@ async function clipboardCases() {
   {
     const notes = [];
     const p = attach.clipboardProvider({
-      mode: "write", max: 10, prompt: () => Promise.resolve(true),
-      clipboard: undefined, notify: (m) => notes.push(m),
+      mode: "write", max: 10, clipboard: undefined, notify: (m) => notes.push(m),
     });
     await p.writeText("c", "x");
     check(
@@ -336,38 +396,151 @@ async function clipboardCases() {
     );
   }
   {
-    const { p, prompts, clip } = provider({ mode: "write", allow: true });
+    const { p, notes } = provider({ mode: "write", max: 65536 });
+    await p.writeText("c", "x".repeat(65537));
+    check(
+      "Push: refusal at a whole-KiB cap names it in KiB",
+      notes.length === 1 && notes[0] === "clipboard: refused (65537 B > 64 KiB)",
+      JSON.stringify(notes)
+    );
+  }
+  {
+    const { p, notes } = provider({ mode: "write", max: 1000 });
+    await p.writeText("c", "x".repeat(1001));
+    check(
+      "Push: refusal at a cap that is not whole KiB names it in bytes",
+      notes.length === 1 && notes[0] === "clipboard: refused (1001 B > 1000 B)",
+      JSON.stringify(notes)
+    );
+  }
+  {
+    const { p, clip, dialog } = provider({ mode: "write", clipText: "secret" });
     const r = await rejects(p.readText("c"));
     check(
       "Query: write mode rejects without prompting",
-      r && prompts.length === 0 && clip.reads === 0
+      r && dialog.shows === 0 && clip.reads === 0
     );
   }
   {
-    const { p, prompts, clip } = provider({ mode: "read-write", allow: true });
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
     const r = await rejects(p.readText("p"));
     check(
       "Query: read-write with a selection other than c rejects",
-      r && prompts.length === 0 && clip.reads === 0
+      r && dialog.shows === 0 && clip.reads === 0
     );
   }
   {
-    const { p, prompts, clip } = provider({ mode: "read-write", allow: false, clipText: "secret" });
-    const r = await rejects(p.readText("c"));
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const pending = settled(p.readText("c"));
+    await tick();
+    const shown = dialog.open && dialog.shows === 1;
+    dialog.allow.dispatch("click");
+    const r = await pending;
     check(
-      "Query: Deny rejects without reading",
-      r && prompts.length === 1 && clip.reads === 0
+      "Query: Allow opens the dialog once and reads the clipboard once",
+      shown && r.ok && r.value === "secret" && clip.reads === 1,
+      JSON.stringify({ shown, reads: clip.reads })
     );
   }
   {
-    const { p, prompts } = provider({ mode: "read-write", allow: true, clipText: "secret" });
-    const got = await p.readText("c");
-    check("Query: Allow returns the clipboard text", got === "secret" && prompts.length === 1);
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const pending = settled(p.readText("c"));
+    await tick();
+    dialog.deny.dispatch("click");
+    const r = await pending;
+    check("Query: Deny rejects without reading", !r.ok && clip.reads === 0 && !dialog.open);
   }
   {
-    const { p } = provider({ mode: "read-write", allow: true, clipText: "" });
-    const r = await rejects(p.readText("c"));
-    check("Query: an empty clipboard rejects rather than resolve ''", r);
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const pending = settled(p.readText("c"));
+    await tick();
+    dialog.close();
+    const r = await pending;
+    check("Query: closing the dialog (Escape) rejects without reading", !r.ok && clip.reads === 0);
+  }
+  {
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const pending = settled(p.readText("c"));
+    await tick();
+    dialog.allow.dispatch("click");
+    await pending;
+    const left = dialog.listenerCount();
+    dialog.allow.dispatch("click");
+    dialog.close();
+    await tick();
+    check(
+      "Query: a settled prompt is closed and leaves no listeners",
+      !dialog.open && left === 0 && clip.reads === 1,
+      JSON.stringify({ left, reads: clip.reads })
+    );
+  }
+  {
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const first = settled(p.readText("c"));
+    await tick();
+    const second = await settled(p.readText("c"));
+    const shows = dialog.shows;
+    dialog.allow.dispatch("click");
+    const r = await first;
+    check(
+      "Query: a query while a prompt is open is denied; the open prompt still answers",
+      !second.ok && shows === 1 && r.ok && r.value === "secret" && clip.reads === 1,
+      JSON.stringify({ shows, reads: clip.reads })
+    );
+  }
+  {
+    const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
+    const first = settled(p.readText("c"));
+    await tick();
+    dialog.deny.dispatch("click");
+    await first;
+    const next = settled(p.readText("c"));
+    await tick();
+    const shows = dialog.shows;
+    dialog.allow.dispatch("click");
+    const r = await next;
+    check(
+      "Query: after a prompt settles the next query prompts again",
+      shows === 2 && r.ok && clip.reads === 1,
+      JSON.stringify({ shows, reads: clip.reads })
+    );
+  }
+  {
+    let built = true;
+    let r = false;
+    let clip;
+    try {
+      ({ p: built, clip } = provider({ mode: "read-write", clipText: "secret", dialog: null }));
+      r = await rejects(built.readText("c"));
+    } catch (e) {
+      built = false;
+    }
+    check("Query: no dialog rejects with no read", built && r && clip.reads === 0);
+  }
+  {
+    const dialog = fakeDialog();
+    delete dialog.showModal;
+    let built = true;
+    let r = false;
+    let clip;
+    try {
+      ({ p: built, clip } = provider({ mode: "read-write", clipText: "secret", dialog }));
+      r = await rejects(built.readText("c"));
+    } catch (e) {
+      built = false;
+    }
+    check(
+      "Query: a dialog without showModal rejects with no read",
+      built && r && clip.reads === 0 && dialog.listenerCount() === 0
+    );
+  }
+  {
+    const { p, dialog } = provider({ mode: "read-write", clipText: "" });
+    const pending = settled(p.readText("c"));
+    await tick();
+    dialog.allow.dispatch("click");
+    const r = await pending;
+    check("Query: an empty clipboard rejects rather than resolve ''", !r.ok);
   }
 }
 
@@ -422,7 +595,7 @@ function missingDeps() {
   for (const fn of [
     () => attach.links({ open: () => {}, title: () => {} }),
     () => attach.links({ platform: "Linux", title: () => {} }),
-    () => attach.clipboardProvider({ mode: "write", max: 1, prompt: () => {} }),
+    () => attach.clipboardProvider({ mode: "write", max: 1 }),
     () => attachSession({ sessions: null }),
     () => attachSession({ clock: { setTimeout() {}, clearTimeout() {} } }),
     () => attachSession({ location: {} }),

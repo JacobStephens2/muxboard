@@ -4,7 +4,7 @@
  *
  * The page builds DOM, xterm and its addons and hands them to this module.
  * Everything the module needs from the browser (platform, open, clipboard,
- * prompt, socket, timers, view callbacks) is passed in, so Node tests drive
+ * the Clipboard query dialog, socket, timers, view callbacks) is passed in, so Node tests drive
  * it with fakes. Regex Links and the Copy join come from wrap-url.js, which
  * the page loads first.
  */
@@ -108,13 +108,61 @@
     return new TextEncoder().encode(s || "").length;
   }
 
+  // The push cap as the refusal notice states it: whole KiB, else bytes.
+  function capText(max) {
+    return max > 0 && max % 1024 === 0 ? max / 1024 + " KiB" : max + " B";
+  }
+
+  // Clipboard query consent: resolves true only on Allow. Deny, or the
+  // dialog's own close (Escape), resolves false. Settles once, then closes
+  // the dialog and drops its listeners.
+  function askDialog(dialog) {
+    return new Promise(function (resolve) {
+      var allow = dialog.querySelector("[data-mb-clip-allow]");
+      var deny = dialog.querySelector("[data-mb-clip-deny]");
+      var settled = false;
+      function done(ok) {
+        if (settled) return;
+        settled = true;
+        if (allow) allow.removeEventListener("click", onAllow);
+        if (deny) deny.removeEventListener("click", onDeny);
+        dialog.removeEventListener("close", onClose);
+        if (dialog.open) dialog.close();
+        resolve(ok);
+      }
+      function onAllow(ev) { ev.preventDefault(); done(true); }
+      function onDeny(ev) { ev.preventDefault(); done(false); }
+      function onClose() { done(false); }
+      if (allow) allow.addEventListener("click", onAllow);
+      if (deny) deny.addEventListener("click", onDeny);
+      dialog.addEventListener("close", onClose);
+      try { dialog.showModal(); } catch (e) { done(false); }
+    });
+  }
+
   // ClipboardAddon provider: Clipboard push and Clipboard query (ADR-0001).
+  // The dialog is rendered only in read-write mode, so a missing one denies
+  // each query rather than failing construction (Kill and Copy keep working).
   function clipboardProvider(env) {
     var mode = requireDep(env, "mode", "string");
     var max = requireDep(env, "max", "number");
-    var prompt = requireDep(env, "prompt", "function");
     var notify = requireDep(env, "notify", "function");
     var clipboard = env.clipboard;
+    var dialog = env.dialog;
+    var asking = false;
+
+    // One prompt at a time: a query while one is open is denied, so one
+    // Allow never grants two reads.
+    function ask() {
+      if (!dialog || typeof dialog.showModal !== "function" || asking) {
+        return Promise.resolve(false);
+      }
+      asking = true;
+      return askDialog(dialog).then(function (ok) {
+        asking = false;
+        return ok;
+      });
+    }
 
     return {
       readText: function (sel) {
@@ -123,7 +171,7 @@
         if (mode !== "read-write" || sel !== "c") {
           return Promise.reject(new Error("clipboard query disabled"));
         }
-        return Promise.resolve(prompt()).then(function (ok) {
+        return ask().then(function (ok) {
           if (!ok) throw new Error("clipboard query denied");
           return clipboard.readText();
         }).then(function (text) {
@@ -135,7 +183,7 @@
         if (sel !== "c") return Promise.resolve();
         var n = utf8Bytes(text);
         if (n > max) {
-          notify("clipboard: refused (" + n + " B > 64 KiB)");
+          notify("clipboard: refused (" + n + " B > " + capText(max) + ")");
           return Promise.resolve();
         }
         return Promise.resolve()

@@ -126,9 +126,8 @@ class Listing:
         }
 
 
-
 def _natural_key(name: str) -> list[tuple[int, int, str]]:
-    """Numeric-aware sort key for tmux session names.
+    """Numeric-aware sort key for Session names.
 
     Names like ``1``, ``2``, ``22`` are common in operator dashboards; natural
     ordering keeps them in numeric order instead of lexicographic order.
@@ -143,12 +142,12 @@ def _natural_key(name: str) -> list[tuple[int, int, str]]:
 def _order_key(
     name: str, session_order: tuple[str, ...]
 ) -> tuple[int, list[tuple[int, int, str]]]:
-    """Sort key honouring a host's explicit ``session_order``.
+    """Sort key honouring a Host's explicit ``session_order``.
 
     The rank is the index of the first entry in ``session_order`` that equals
     ``name`` or is a prefix of it; a name matching no entry ranks after every
-    named one. Ties - including every name on a host that configures no order -
-    fall through to :func:`_natural_key`, so an unconfigured host sorts exactly
+    named one. Ties - including every name on a Host that configures no order -
+    fall through to :func:`_natural_key`, so an unconfigured Host sorts exactly
     as it always has.
 
     First-entry-wins is what makes an overlapping order predictable: with

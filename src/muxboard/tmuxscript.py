@@ -25,7 +25,7 @@ from typing import Mapping, Optional, Sequence
 from .inventory import valid_socket_path
 from .listing import ListedSession
 
-log = logging.getLogger("muxboard.tmuxscript")
+_log = logging.getLogger("muxboard.tmuxscript")
 
 # Field separator for every line a script emits. Must be printable: tmux 3.4+
 # escapes non-printable bytes in format output as octal (so a raw US 0x1F
@@ -74,7 +74,7 @@ def socket_read_script(socket_file: str, users: Sequence[str], login_user: str) 
     """Script emitting one ``__MUXBOARD_SOCK__<SEP><user><SEP><path>`` line per
     user in ``users``, read from ``socket_file``.
 
-    The file is read *as the tmux user* - the same account the tmux command
+    The file is read *as the Tmux user* - the same account the tmux command
     will run as - so muxboard never reads a path out of a file that user could
     not read itself. ``head -c`` caps the read and ``head -n 1`` enforces the
     single-line rule; :func:`read_sockets` validates the value before it is
@@ -91,7 +91,7 @@ def socket_read_script(socket_file: str, users: Sequence[str], login_user: str) 
         emit = (
             f"printf '{_SOCK_MARK}{_SEP}%s{_SEP}%s\\n' {shlex.quote(u)} \"$({read})\""
         )
-        parts.append(_as_user(u, prefix, emit))
+        parts.append(_if_sudo_allows(u, login_user, emit))
     return "; ".join(parts)
 
 
@@ -103,7 +103,7 @@ def read_sockets(
 
     Every user in ``users`` lands in exactly one of the two, so a user whose
     socket file is missing shows up as an error in the UI rather than as a
-    deceptively empty session list.
+    deceptively empty list of Sessions.
     """
     seen: dict[str, str] = {}
     refused: set[str] = set()
@@ -120,7 +120,7 @@ def read_sockets(
         if len(cols) < 3:
             # A truncated marker line is not worth killing the sweep over;
             # the user it belonged to falls through to an error below.
-            log.debug("muxboard: unparseable socket line %r", raw)
+            _log.debug("muxboard: unparseable socket line %r", raw)
             continue
         seen[cols[1]] = cols[2]
     sockets: dict[str, str] = {}
@@ -132,7 +132,7 @@ def read_sockets(
         elif not path:
             errors[u] = _SOCKET_UNREADABLE
         elif not valid_socket_path(path):
-            log.warning("muxboard: rejected socket path %r from socket file", path)
+            _log.warning("muxboard: rejected socket path %r from socket file", path)
             errors[u] = _SOCKET_INVALID
         else:
             sockets[u] = path
@@ -153,14 +153,15 @@ def listing_script(
     for u in users:
         if u not in sockets:
             continue
-        prefix = _as_user_prefix(u, login_user)
         per_user_fmt = f"{u}{_SEP}{_FMT}"
         ls = (
             f"{tmux_prefix(u, sockets[u], login_user)}ls -F '{per_user_fmt}' "
             "2>/dev/null || true"
         )
-        # The two leading spaces keep the generated text what it has always been.
-        parts.append(_as_user(u, prefix, f"  {ls}" if prefix else ls))
+        if u != login_user:
+            # The two leading spaces keep the generated text what it has always been.
+            ls = f"  {ls}"
+        parts.append(_if_sudo_allows(u, login_user, ls))
     return "; ".join(parts)
 
 
@@ -181,7 +182,7 @@ def read_listing(
             continue
         cols = line.split(_SEP)
         if len(cols) < 7:
-            log.debug("muxboard: unparseable tmux list line %r", raw)
+            _log.debug("muxboard: unparseable tmux list line %r", raw)
             continue
         user, name, windows, created, attached, activity, sid = cols[:7]
         try:
@@ -195,18 +196,19 @@ def read_listing(
                 id=sid,
             )
         except ValueError:
-            log.debug("muxboard: bad ints in tmux list line %r", raw)
+            _log.debug("muxboard: bad ints in tmux list line %r", raw)
             continue
         sessions_by_user.setdefault(user, []).append(entry)
     return sessions_by_user, errors
 
 
-def _as_user(user: str, prefix: str, command: str) -> str:
-    """``command``, run only once the login user is known to become ``user``.
+def _if_sudo_allows(user: str, login_user: str, command: str) -> str:
+    """``command``, run only once ``login_user`` is known to become ``user``.
 
-    With no sudo ``prefix`` (``user`` is the login user) there is nothing to
-    probe. Otherwise a refused ``sudo -n`` emits the refusal marker instead.
+    When ``user`` is the login user there is no sudo and nothing to probe.
+    Otherwise a refused ``sudo -n`` emits the refusal marker instead.
     """
+    prefix = _as_user_prefix(user, login_user)
     if not prefix:
         return command
     return (
@@ -221,7 +223,7 @@ def _refused_user(line: str) -> Optional[str]:
         return None
     cols = line.split(_SEP, 2)
     if len(cols) < 3 or not cols[1]:
-        log.debug("muxboard: unparseable refusal line %r", line)
+        _log.debug("muxboard: unparseable refusal line %r", line)
         return None
     return cols[1]
 

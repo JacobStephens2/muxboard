@@ -156,6 +156,38 @@ async function createCases() {
   }
 }
 
+// Refresh
+async function refreshCases() {
+  {
+    const fetch = fakeFetch({ status: 200, json: { ok: true } });
+    const out = await client(fetch).refresh();
+    const c = fetch.calls[0];
+    check(
+      "Refresh: POSTs same-origin to the refresh route",
+      fetch.calls.length === 1 &&
+        c.url === "/mux/api/refresh" &&
+        c.init.method === "POST" &&
+        c.init.credentials === "same-origin"
+    );
+    check("Refresh: success resolves ok", out.ok === true && !("error" in out));
+  }
+  {
+    const out = await client(fakeFetch({ status: 500, json: { ok: false, error: "sweep failed" } })).refresh();
+    check("Refresh: non-ok JSON reports the server's error", out.ok === false && out.error === "sweep failed");
+  }
+  {
+    const out = await client(fakeFetch({ status: 401 })).refresh();
+    check("Refresh: an HTML error page reports HTTP status", out.ok === false && out.error === "HTTP 401");
+  }
+  {
+    const out = await client(fakeFetch({ reject: new TypeError("Failed to fetch") })).refresh();
+    check(
+      "Refresh: network failure resolves with the error's text",
+      out.ok === false && out.error === "TypeError: Failed to fetch"
+    );
+  }
+}
+
 function missingDeps() {
   let threw = 0;
   for (const fn of [
@@ -171,5 +203,6 @@ function missingDeps() {
 missingDeps();
 await killCases();
 await createCases();
+await refreshCases();
 
 process.exit(failed ? 1 : 0);

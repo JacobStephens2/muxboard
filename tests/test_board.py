@@ -218,11 +218,12 @@ def test_attach_page_loads_session_requests_then_wrap_url_then_attach_client():
     assert "addon-web-links" not in html
 
 
-def test_dashboard_loads_session_requests_before_dashboard_script():
+def test_dashboard_loads_session_requests_before_dashboard_client():
     app, _ = _app(lambda r: Principal(name="admin"))
     html = app.test_client().get("/mux/").get_data(as_text=True)
     assert "muxboard/sessions.js" in html
-    assert html.index("muxboard/sessions.js") < html.index("muxboard/muxboard.js")
+    assert "muxboard/muxboard.js" not in html
+    assert html.index("muxboard/sessions.js") < html.index("muxboard/dashboard.js")
 
 
 def test_attach_omits_clipboard_addon_when_osc52_off():

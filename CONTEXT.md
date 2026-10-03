@@ -29,7 +29,7 @@ A live, interactive browser view of one Session.
 _Avoid_: terminal tab, replay, log view
 
 **Kill**:
-An operator action that ends a Session on its Host. The request echoes the Session name as confirmation; a mismatch is refused.
+An operator action that ends a Session on its Host. The request echoes the Session name as confirmation; a mismatch is refused. On the Dashboard the operator first types the Session name, and nothing is sent until it matches; that typed-name gate is the client's, separate from the request's echo.
 _Avoid_: delete, terminate, close
 
 **Selection**:

@@ -257,7 +257,6 @@ function chordCases() {
 function fakeTarget() {
   const listeners = {};
   return {
-    listeners,
     addEventListener(type, fn) {
       (listeners[type] = listeners[type] || []).push(fn);
     },
@@ -328,6 +327,31 @@ function settled(promise) {
     (value) => ({ ok: true, value }),
     (error) => ({ ok: false, error })
   );
+}
+
+// Run one Clipboard query to its prompt, then answer it: "allow", "deny" or
+// "close" (Escape). Reports whether the prompt was open when answered.
+async function query(p, dialog, answer) {
+  const pending = settled(p.readText("c"));
+  await tick();
+  const shown = dialog.open;
+  if (answer === "allow") dialog.allow.dispatch("click");
+  if (answer === "deny") dialog.deny.dispatch("click");
+  if (answer === "close") dialog.close();
+  return Object.assign(await pending, { shown });
+}
+
+// Build a read-write provider around dialog and query it once. Reports
+// whether construction threw rather than letting it end the run.
+async function queryWith(dialog) {
+  let made;
+  try {
+    made = provider({ mode: "read-write", clipText: "secret", dialog });
+  } catch (e) {
+    return { constructed: false };
+  }
+  const rejected = await rejects(made.p.readText("c"));
+  return { constructed: true, rejected, reads: made.clip.reads };
 }
 
 async function rejects(promise) {
@@ -431,39 +455,26 @@ async function clipboardCases() {
   }
   {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
-    const pending = settled(p.readText("c"));
-    await tick();
-    const shown = dialog.open && dialog.shows === 1;
-    dialog.allow.dispatch("click");
-    const r = await pending;
+    const r = await query(p, dialog, "allow");
     check(
       "Query: Allow opens the dialog once and reads the clipboard once",
-      shown && r.ok && r.value === "secret" && clip.reads === 1,
-      JSON.stringify({ shown, reads: clip.reads })
+      r.shown && dialog.shows === 1 && r.ok && r.value === "secret" && clip.reads === 1,
+      JSON.stringify({ shows: dialog.shows, reads: clip.reads })
     );
   }
   {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
-    const pending = settled(p.readText("c"));
-    await tick();
-    dialog.deny.dispatch("click");
-    const r = await pending;
+    const r = await query(p, dialog, "deny");
     check("Query: Deny rejects without reading", !r.ok && clip.reads === 0 && !dialog.open);
   }
   {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
-    const pending = settled(p.readText("c"));
-    await tick();
-    dialog.close();
-    const r = await pending;
+    const r = await query(p, dialog, "close");
     check("Query: closing the dialog (Escape) rejects without reading", !r.ok && clip.reads === 0);
   }
   {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
-    const pending = settled(p.readText("c"));
-    await tick();
-    dialog.allow.dispatch("click");
-    await pending;
+    await query(p, dialog, "allow");
     const left = dialog.listenerCount();
     dialog.allow.dispatch("click");
     dialog.close();
@@ -478,68 +489,45 @@ async function clipboardCases() {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
     const first = settled(p.readText("c"));
     await tick();
-    const second = await settled(p.readText("c"));
+    let second = null;
+    settled(p.readText("c")).then((r) => { second = r; });
+    await tick();
     const shows = dialog.shows;
+    const deniedAtOnce = second !== null && !second.ok;
     dialog.allow.dispatch("click");
     const r = await first;
     check(
       "Query: a query while a prompt is open is denied; the open prompt still answers",
-      !second.ok && shows === 1 && r.ok && r.value === "secret" && clip.reads === 1,
-      JSON.stringify({ shows, reads: clip.reads })
+      deniedAtOnce && shows === 1 && r.ok && r.value === "secret" && clip.reads === 1,
+      JSON.stringify({ deniedAtOnce, shows, reads: clip.reads })
     );
   }
   {
     const { p, clip, dialog } = provider({ mode: "read-write", clipText: "secret" });
-    const first = settled(p.readText("c"));
-    await tick();
-    dialog.deny.dispatch("click");
-    await first;
-    const next = settled(p.readText("c"));
-    await tick();
-    const shows = dialog.shows;
-    dialog.allow.dispatch("click");
-    const r = await next;
+    await query(p, dialog, "deny");
+    const r = await query(p, dialog, "allow");
     check(
       "Query: after a prompt settles the next query prompts again",
-      shows === 2 && r.ok && clip.reads === 1,
-      JSON.stringify({ shows, reads: clip.reads })
+      dialog.shows === 2 && r.shown && r.ok && clip.reads === 1,
+      JSON.stringify({ shows: dialog.shows, reads: clip.reads })
     );
   }
   {
-    let built = true;
-    let r = false;
-    let clip;
-    try {
-      ({ p: built, clip } = provider({ mode: "read-write", clipText: "secret", dialog: null }));
-      r = await rejects(built.readText("c"));
-    } catch (e) {
-      built = false;
-    }
-    check("Query: no dialog rejects with no read", built && r && clip.reads === 0);
+    const r = await queryWith(null);
+    check("Query: no dialog rejects with no read", r.constructed && r.rejected && r.reads === 0);
   }
   {
     const dialog = fakeDialog();
     delete dialog.showModal;
-    let built = true;
-    let r = false;
-    let clip;
-    try {
-      ({ p: built, clip } = provider({ mode: "read-write", clipText: "secret", dialog }));
-      r = await rejects(built.readText("c"));
-    } catch (e) {
-      built = false;
-    }
+    const r = await queryWith(dialog);
     check(
       "Query: a dialog without showModal rejects with no read",
-      built && r && clip.reads === 0 && dialog.listenerCount() === 0
+      r.constructed && r.rejected && r.reads === 0 && dialog.listenerCount() === 0
     );
   }
   {
     const { p, dialog } = provider({ mode: "read-write", clipText: "" });
-    const pending = settled(p.readText("c"));
-    await tick();
-    dialog.allow.dispatch("click");
-    const r = await pending;
+    const r = await query(p, dialog, "allow");
     check("Query: an empty clipboard rejects rather than resolve ''", !r.ok);
   }
 }

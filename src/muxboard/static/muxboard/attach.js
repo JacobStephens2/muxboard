@@ -4,9 +4,9 @@
  *
  * The page builds DOM, xterm and its addons and hands them to this module.
  * Everything the module needs from the browser (platform, open, clipboard,
- * the Clipboard query dialog, socket, timers, view callbacks) is passed in, so Node tests drive
- * it with fakes. Regex Links and the Copy join come from wrap-url.js, which
- * the page loads first.
+ * the Clipboard query dialog, socket, timers, view callbacks) is passed in,
+ * so Node tests drive it with fakes. Regex Links and the Copy join come
+ * from wrap-url.js, which the page loads first.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
@@ -116,7 +116,7 @@
   // Clipboard query consent: resolves true only on Allow. Deny, or the
   // dialog's own close (Escape), resolves false. Settles once, then closes
   // the dialog and drops its listeners.
-  function askDialog(dialog) {
+  function promptQuery(dialog) {
     return new Promise(function (resolve) {
       var allow = dialog.querySelector("[data-mb-clip-allow]");
       var deny = dialog.querySelector("[data-mb-clip-deny]");
@@ -153,12 +153,12 @@
 
     // One prompt at a time: a query while one is open is denied, so one
     // Allow never grants two reads.
-    function ask() {
+    function consent() {
       if (!dialog || typeof dialog.showModal !== "function" || asking) {
         return Promise.resolve(false);
       }
       asking = true;
-      return askDialog(dialog).then(function (ok) {
+      return promptQuery(dialog).then(function (ok) {
         asking = false;
         return ok;
       });
@@ -171,7 +171,7 @@
         if (mode !== "read-write" || sel !== "c") {
           return Promise.reject(new Error("clipboard query disabled"));
         }
-        return ask().then(function (ok) {
+        return consent().then(function (ok) {
           if (!ok) throw new Error("clipboard query denied");
           return clipboard.readText();
         }).then(function (text) {

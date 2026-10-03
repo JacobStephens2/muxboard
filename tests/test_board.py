@@ -220,13 +220,14 @@ def test_attach_page_has_copy_control():
     assert 'data-mb-osc52="off"' in html
 
 
-def test_attach_page_loads_wrap_url_helper():
+def test_attach_page_loads_attach_client_after_wrap_url_helper():
     r = _attach()
     assert r.status_code == 200
-    assert b"wrap-url.js" in r.data
-    assert b"registerLinkProvider" in r.data
-    assert b"mbWrapUrl.copyText" in r.data
-    assert b"addon-web-links" not in r.data
+    html = r.data.decode()
+    assert "muxboard/wrap-url.js" in html
+    assert "muxboard/attach.js" in html
+    assert html.index("muxboard/wrap-url.js") < html.index("muxboard/attach.js")
+    assert "addon-web-links" not in html
 
 
 def test_attach_omits_clipboard_addon_when_osc52_off():

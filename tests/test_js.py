@@ -6,12 +6,14 @@ import pytest
 
 NODE = shutil.which("node")
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = sorted((ROOT / "tests/js").glob("*.test.mjs"))
 
 
-@pytest.mark.skipif(not NODE, reason="node required to run wrap-url.js")
-def test_hard_wrapped_url_join_and_copy():
+@pytest.mark.skipif(not NODE, reason="node required to run the JS tests")
+@pytest.mark.parametrize("script", SCRIPTS, ids=[s.name for s in SCRIPTS])
+def test_js(script):
     r = subprocess.run(
-        [NODE, str(ROOT / "tests/js/wrap-url.test.mjs")],
+        [NODE, str(script)],
         cwd=ROOT,
         capture_output=True,
         text=True,

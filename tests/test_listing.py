@@ -20,7 +20,7 @@ def _worked():
         _host(),
         sessions={"alice": [_session("alice", "a1")], "bob": [_session("bob", "b1", "$2")]},
         errors={"alice": "sudo refused", "bob": "socket file unreadable"},
-        sweep_ms=12,
+        elapsed_ms=12,
     )
 
 
@@ -29,13 +29,13 @@ def test_worked_takes_users_from_the_host():
     assert listing.ok is True
     assert listing.error is None
     assert listing.users == ("alice", "bob")
-    assert listing.sweep_ms == 12
+    assert listing.elapsed_ms == 12
     assert listing.checked_at is None
     assert listing.sessions["alice"] == (_session("alice", "a1"),)
 
 
 def test_worked_for_an_inventory_only_host_is_empty():
-    listing = Listing.worked(_host(users=()), sessions={}, errors={}, sweep_ms=0)
+    listing = Listing.worked(_host(users=()), sessions={}, errors={}, elapsed_ms=0)
     assert listing.as_dict() == {
         "ok": True, "error": None, "sessions": {}, "errors": {},
         "users": [], "sweep_ms": 0, "checked_at": None,
@@ -48,7 +48,7 @@ def test_failed_defaults_to_no_elapsed_time():
         "ok": False, "error": "boom", "sessions": {}, "errors": {},
         "users": ["alice", "bob"], "sweep_ms": 0, "checked_at": None,
     }
-    assert Listing.failed(_host(), "boom", sweep_ms=7).sweep_ms == 7
+    assert Listing.failed(_host(), "boom", elapsed_ms=7).elapsed_ms == 7
 
 
 def test_dict_form_is_the_api_sessions_wire_shape():
@@ -102,9 +102,9 @@ def test_scoped_to_no_users_leaves_nothing():
 
 
 def test_scoping_keeps_stamp_and_outcome():
-    listing = Listing.failed(_host(), "boom", sweep_ms=3).stamped(9.0)
+    listing = Listing.failed(_host(), "boom", elapsed_ms=3).stamped(9.0)
     scoped = listing.scoped(frozenset({"bob"}))
-    assert (scoped.ok, scoped.error, scoped.sweep_ms, scoped.checked_at) == (
+    assert (scoped.ok, scoped.error, scoped.elapsed_ms, scoped.checked_at) == (
         False, "boom", 3, 9.0,
     )
 
@@ -122,10 +122,16 @@ def test_each_dict_form_is_independent():
 
 def test_listing_cannot_be_edited_after_construction():
     sessions = {"alice": [_session("alice")]}
-    listing = Listing.worked(_host(), sessions=sessions, errors={}, sweep_ms=0)
+    listing = Listing.worked(_host(), sessions=sessions, errors={}, elapsed_ms=0)
     sessions["alice"].append(_session("alice", "late"))
     assert len(listing.sessions["alice"]) == 1
     with pytest.raises(TypeError):
         listing.sessions["bob"] = ()
     with pytest.raises(AttributeError):
         listing.ok = False
+
+
+def test_listing_is_equal_by_value_but_not_hashable():
+    assert _worked() == _worked()
+    with pytest.raises(TypeError):
+        hash(_worked())

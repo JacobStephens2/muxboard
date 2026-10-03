@@ -17,7 +17,7 @@ def _ok(host):
                                     attached=False, activity=1, id="$1")]
                   for u in host.tmux_users},
         errors={u: "sudo refused" for u in host.tmux_users},
-        sweep_ms=1,
+        elapsed_ms=1,
     )
 
 

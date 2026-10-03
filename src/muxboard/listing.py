@@ -10,7 +10,7 @@ the JSON ``api/sessions`` returns and the Dashboard template reads.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional
 
@@ -30,15 +30,8 @@ class ListedSession:
     id: str
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "user": self.user,
-            "name": self.name,
-            "windows": self.windows,
-            "created": self.created,
-            "attached": self.attached,
-            "activity": self.activity,
-            "id": self.id,
-        }
+        # Field order is the wire order of a Session in ``api/sessions``.
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -55,8 +48,12 @@ class Listing:
     sessions: Mapping[str, tuple[ListedSession, ...]]
     errors: Mapping[str, str]
     users: tuple[str, ...]
-    sweep_ms: int
+    elapsed_ms: int
     checked_at: Optional[float] = None
+
+    # Equal by value, but not hashable: ``sessions`` and ``errors`` are
+    # read-only mappings, which cannot be hashed.
+    __hash__ = None
 
     @classmethod
     def worked(
@@ -65,28 +62,28 @@ class Listing:
         *,
         sessions: Mapping[str, Iterable[ListedSession]],
         errors: Mapping[str, str],
-        sweep_ms: int,
+        elapsed_ms: int,
     ) -> Listing:
         """A listing that reached the Host; per-user failures go in ``errors``."""
         return cls(
             ok=True,
             error=None,
-            sessions=_frozen({u: tuple(ss) for u, ss in sessions.items()}),
-            errors=_frozen(dict(errors)),
+            sessions=MappingProxyType({u: tuple(ss) for u, ss in sessions.items()}),
+            errors=MappingProxyType(dict(errors)),
             users=tuple(host.tmux_users),
-            sweep_ms=sweep_ms,
+            elapsed_ms=elapsed_ms,
         )
 
     @classmethod
-    def failed(cls, host: Host, error: str, *, sweep_ms: int = 0) -> Listing:
+    def failed(cls, host: Host, error: str, *, elapsed_ms: int = 0) -> Listing:
         """A listing that failed outright."""
         return cls(
             ok=False,
             error=error,
-            sessions=_frozen({}),
-            errors=_frozen({}),
+            sessions=MappingProxyType({}),
+            errors=MappingProxyType({}),
             users=tuple(host.tmux_users),
-            sweep_ms=sweep_ms,
+            elapsed_ms=elapsed_ms,
         )
 
     def stamped(self, checked_at: float) -> Listing:
@@ -99,8 +96,8 @@ class Listing:
             return self
         return replace(
             self,
-            sessions=_frozen({u: v for u, v in self.sessions.items() if u in allowed}),
-            errors=_frozen({u: v for u, v in self.errors.items() if u in allowed}),
+            sessions=MappingProxyType({u: v for u, v in self.sessions.items() if u in allowed}),
+            errors=MappingProxyType({u: v for u, v in self.errors.items() if u in allowed}),
             users=tuple(u for u in self.users if u in allowed),
         )
 
@@ -114,10 +111,8 @@ class Listing:
             },
             "errors": dict(self.errors),
             "users": list(self.users),
-            "sweep_ms": self.sweep_ms,
+            # Named for the Sweep on the wire; it times this one Host's listing.
+            "sweep_ms": self.elapsed_ms,
             "checked_at": self.checked_at,
         }
 
-
-def _frozen(d: dict[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(d)

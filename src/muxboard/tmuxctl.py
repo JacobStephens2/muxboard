@@ -434,7 +434,7 @@ class TmuxController:
         """List ``host``'s Sessions. Every failure is a Listing too, never raised."""
         start = time.monotonic()
         if not host.tmux_users:
-            return Listing.worked(host, sessions={}, errors={}, sweep_ms=0)
+            return Listing.worked(host, sessions={}, errors={}, elapsed_ms=0)
         try:
             sockets, socket_errors = self._resolve_sockets(host)
         except TmuxctlError as exc:
@@ -443,7 +443,7 @@ class TmuxController:
             # Every user's socket file failed to resolve; there is nothing to
             # ask tmux, but the reason belongs in the UI.
             return Listing.worked(
-                host, sessions={}, errors=socket_errors, sweep_ms=_elapsed_ms(start)
+                host, sessions={}, errors=socket_errors, elapsed_ms=_elapsed_ms(start)
             )
         argv, env_add = self._build_argv(host, self._list_script(host, sockets))
         env = {**os.environ, **env_add} if env_add else None
@@ -466,12 +466,12 @@ class TmuxController:
             host,
             sessions=parsed["sessions"],
             errors={**socket_errors, **parsed["errors"]},
-            sweep_ms=_elapsed_ms(start),
+            elapsed_ms=_elapsed_ms(start),
         )
 
     @staticmethod
     def _list_fail(host: Host, error: str, start: float) -> Listing:
-        return Listing.failed(host, error, sweep_ms=_elapsed_ms(start))
+        return Listing.failed(host, error, elapsed_ms=_elapsed_ms(start))
 
     # ---------- kill / create ----------
 

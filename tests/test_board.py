@@ -28,7 +28,7 @@ def _listing(host):
                   "bob": [ListedSession(user="bob", name="b", windows=1, created=1,
                                         attached=False, activity=1, id="$2")]},
         errors={},
-        sweep_ms=1,
+        elapsed_ms=1,
     )
 
 

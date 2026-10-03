@@ -129,7 +129,7 @@ def _fake_run(monkeypatch, *, raises=None, returncode=0, stdout="", stderr=""):
 
 def test_list_host_on_an_inventory_only_host_is_an_empty_listing():
     h = _local()
-    assert _ctrl(h).list_host(h) == Listing.worked(h, sessions={}, errors={}, sweep_ms=0)
+    assert _ctrl(h).list_host(h) == Listing.worked(h, sessions={}, errors={}, elapsed_ms=0)
 
 
 def test_list_host_success_is_a_listing_of_listed_sessions(monkeypatch):

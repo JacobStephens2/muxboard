@@ -25,8 +25,8 @@ _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 # shell script that already runs through `sudo -n -u`, and one form of them is
 # read out of a file some other tool wrote, so they get their own whitelist
 # instead of relying on shlex.quote() alone. `:` is excluded deliberately: a
-# resolved path travels back from the host inside a line this package splits
-# on `::` (see _SEP in tmuxctl).
+# resolved path travels back from the host inside a line the tmux script module
+# (muxboard.tmuxscript) splits on `::`.
 _SOCKET_SEGMENT_RE = re.compile(r"[A-Za-z0-9._@%+=,-]{1,255}")
 
 # Generous next to PATH_MAX but far below it - a socket path this long is a

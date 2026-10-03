@@ -16,53 +16,20 @@ latest listing of every Host and renews it in the background.
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import shlex
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Optional
 
-from .inventory import Host, index_by_key, valid_socket_path
-from .listing import ListedSession, Listing
-
-log = logging.getLogger("muxboard.tmuxctl")
-
-# Field separator for `tmux ls -F`. Must be printable: tmux 3.4+ escapes
-# non-printable bytes in format output as octal (so a raw US 0x1F becomes the
-# four characters "\037" and parsing silently fails). Session names cannot
-# contain `.` or `:`, so a double-colon is unambiguous across every field we
-# emit (name, ints, `$id`, and the user prefix we prepend).
-# Order: name <SEP> windows <SEP> created <SEP> attached <SEP> activity <SEP> id
-_SEP = "::"
-_FMT = (
-    "#{session_name}" + _SEP +
-    "#{session_windows}" + _SEP +
-    "#{session_created}" + _SEP +
-    "#{session_attached}" + _SEP +
-    "#{session_activity}" + _SEP +
-    "#{session_id}"
-)
+from . import tmuxscript
+from .inventory import Host, index_by_key
+from .listing import Listing
 
 # New-session name whitelist: liberal, but no shell metas, no `.` (pane/window
 # selector), `:` (target separator), or spaces.
 _NEW_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-# Marker for the socket-path lines a `tmux_socket_file` host emits, and the
-# ceiling on how much of that file we are willing to read. The file belongs to
-# whatever tool minted the socket, so treat it as untrusted input: capped,
-# first line only, and validated against the same whitelist as a literal path.
-_SOCK_MARK = "__MUXBOARD_SOCK__"
-_SOCKET_FILE_MAX_BYTES = 4096
-
-# Stand-in the read script emits when sudo itself is refused, so "cannot become
-# this user" stays distinguishable from "the file is not there". Not a valid
-# socket path (no leading /), so it can never be mistaken for one.
-_SOCK_DENIED = "__MUXBOARD_SUDO_REFUSED__"
-
-_SOCKET_UNREADABLE = "socket file unreadable (missing or empty)"
-_SOCKET_INVALID = "socket file does not contain a valid absolute socket path"
 
 
 class TmuxctlError(Exception):
@@ -71,68 +38,6 @@ class TmuxctlError(Exception):
 
 def valid_new_session_name(name: str) -> bool:
     return bool(_NEW_SESSION_RE.match(name))
-
-
-def _natural_key(name: str) -> list[tuple[int, int, str]]:
-    """Numeric-aware sort key for tmux session names.
-
-    Names like ``1``, ``2``, ``22`` are common in operator dashboards; natural
-    ordering keeps them in numeric order instead of lexicographic order.
-    """
-    return [
-        (0, int(part), "") if part.isdigit() else (1, 0, part.lower())
-        for part in re.split(r"(\d+)", name)
-        if part
-    ]
-
-
-def _order_key(
-    name: str, session_order: tuple[str, ...]
-) -> tuple[int, list[tuple[int, int, str]]]:
-    """Sort key honouring a host's explicit ``session_order``.
-
-    The rank is the index of the first entry in ``session_order`` that equals
-    ``name`` or is a prefix of it; a name matching no entry ranks after every
-    named one. Ties - including every name on a host that configures no order -
-    fall through to :func:`_natural_key`, so an unconfigured host sorts exactly
-    as it always has.
-
-    First-entry-wins is what makes an overlapping order predictable: with
-    ``("build-final", "build")`` the specific entry is reachable, and with the
-    two swapped ``build-final`` is absorbed by the prefix. Documented rather
-    than resolved by longest-match, because the operator wrote the order down
-    and reading it top to bottom should be the whole rule.
-    """
-    if not session_order:
-        return (0, _natural_key(name))
-    rank = len(session_order)
-    for i, entry in enumerate(session_order):
-        if name.startswith(entry):
-            rank = i
-            break
-    return (rank, _natural_key(name))
-
-
-def _as_user_prefix(target_user: str, login_user: str) -> str:
-    """Shell prefix that elevates from login_user to target_user.
-
-    Returns ``"sudo -n -u <user> "`` (with trailing space), or ``""`` when the
-    target is the login user.
-    """
-    if target_user == login_user:
-        return ""
-    return f"sudo -n -u {shlex.quote(target_user)} "
-
-
-def _socket_flag(path: str) -> str:
-    """``"-S <path> "`` (with trailing space) for a non-default tmux socket.
-
-    Empty string for the default socket, which keeps every generated command
-    byte-for-byte what it was before sockets were configurable.
-    """
-    if not path:
-        return ""
-    return f"-S {shlex.quote(path)} "
 
 
 class TmuxController:
@@ -229,78 +134,6 @@ class TmuxController:
 
     # ---------- socket resolution ----------
 
-    def _socket_read_script(self, host: Host, users: tuple[str, ...]) -> str:
-        """Remote script emitting ``__MUXBOARD_SOCK__<SEP><user><SEP><path>``
-        for each of ``users`` on a ``tmux_socket_file`` host.
-
-        The file is read *as the tmux user* - the same account the tmux command
-        will run as - so muxboard never reads a path out of a file that user
-        could not read itself. ``head -c`` caps the read and ``head -n 1``
-        enforces the single-line rule; the value is validated in Python by
-        :func:`~muxboard.inventory.valid_socket_path` before it is ever
-        interpolated into a tmux command.
-
-        Sudo refusal is probed separately, the same way :meth:`_list_script`
-        does it, so "cannot become this user" and "the file is not there" stay
-        two different facts in the UI instead of collapsing into one empty read.
-        """
-        login = self._login_user(host)
-        quoted_file = shlex.quote(host.tmux_socket_file)
-        parts: list[str] = []
-        for u in users:
-            prefix = _as_user_prefix(u, login)
-            read = (
-                f"{prefix}head -c {_SOCKET_FILE_MAX_BYTES} -- {quoted_file} "
-                f"2>/dev/null | head -n 1"
-            )
-            emit = f"printf '{_SOCK_MARK}{_SEP}%s{_SEP}%s\\n' {shlex.quote(u)}"
-            if prefix:
-                parts.append(
-                    f"if {prefix}true 2>/dev/null; then {emit} \"$({read})\"; "
-                    f"else {emit} '{_SOCK_DENIED}'; fi"
-                )
-            else:
-                parts.append(f"{emit} \"$({read})\"")
-        return "; ".join(parts)
-
-    @staticmethod
-    def _parse_socket_output(
-        text: str, users: tuple[str, ...]
-    ) -> tuple[dict[str, str], dict[str, str]]:
-        """Split socket-read output into ``(sockets_by_user, errors_by_user)``.
-
-        Every requested user lands in exactly one of the two dicts, so a user
-        whose socket file is missing shows up as an error in the UI rather than
-        as a deceptively empty session list.
-        """
-        seen: dict[str, str] = {}
-        mark = _SOCK_MARK + _SEP
-        for raw in text.splitlines():
-            line = raw.rstrip("\r")
-            if not line.startswith(mark):
-                continue
-            cols = line.split(_SEP, 2)
-            if len(cols) < 3:
-                # A truncated marker line is not worth killing the sweep over;
-                # the user it belonged to falls through to an error below.
-                log.debug("muxboard: unparseable socket line %r", raw)
-                continue
-            seen[cols[1]] = cols[2]
-        sockets: dict[str, str] = {}
-        errors: dict[str, str] = {}
-        for u in users:
-            path = seen.get(u, "")
-            if path == _SOCK_DENIED:
-                errors[u] = "sudo refused"
-            elif not path:
-                errors[u] = _SOCKET_UNREADABLE
-            elif not valid_socket_path(path):
-                log.warning("muxboard: rejected socket path %r from socket file", path)
-                errors[u] = _SOCKET_INVALID
-            else:
-                sockets[u] = path
-        return sockets, errors
-
     def _resolve_sockets(
         self, host: Host, users: Optional[tuple[str, ...]] = None
     ) -> tuple[dict[str, str], dict[str, str]]:
@@ -323,7 +156,9 @@ class TmuxController:
             return {u: host.tmux_socket for u in wanted}, {}
         if not host.tmux_socket_file:
             return {u: "" for u in wanted}, {}
-        script = self._socket_read_script(host, wanted)
+        script = tmuxscript.socket_read_script(
+            host.tmux_socket_file, wanted, self._login_user(host)
+        )
         argv, env_add = self._build_argv(host, script)
         env = {**os.environ, **env_add} if env_add else None
         try:
@@ -342,7 +177,7 @@ class TmuxController:
         if r.returncode != 0 and not r.stdout.strip():
             tail = (r.stderr.strip().splitlines() or ["unknown"])[-1]
             raise TmuxctlError(f"socket file read failed: exit {r.returncode}: {tail}")
-        return self._parse_socket_output(r.stdout, wanted)
+        return tmuxscript.read_sockets(r.stdout, wanted)
 
     def _tmux_for(self, host: Host, user: str) -> str:
         """Everything a single-user tmux command needs before its subcommand:
@@ -355,80 +190,9 @@ class TmuxController:
         sockets, errors = self._resolve_sockets(host, (user,))
         if user in errors:
             raise TmuxctlError(f"{host.key}/{user}: {errors[user]}")
-        prefix = _as_user_prefix(user, self._login_user(host))
-        return f"{prefix}tmux {_socket_flag(sockets[user])}"
+        return tmuxscript.tmux_prefix(user, sockets[user], self._login_user(host))
 
     # ---------- list ----------
-
-    def _list_script(self, host: Host, sockets: dict[str, str]) -> str:
-        """Remote script emitting one line per session:
-            <user><US><name><US><windows><US><created><US><attached><US><activity><US><id>
-        plus ``__MUXBOARD_ERR__<US><user><US><msg>`` marker lines when a
-        user's sudo is refused (so the UI shows "permission denied" instead of
-        a deceptively empty list). The literal 0x1F byte survives SSH transport
-        unchanged inside the single-quoted format string.
-
-        ``sockets`` maps user to the already-resolved socket path (empty string
-        for the default socket). Only the users it contains are listed; a user
-        whose socket could not be resolved is reported as an error instead.
-        """
-        login = self._login_user(host)
-        parts: list[str] = []
-        for u in host.tmux_users:
-            if u not in sockets:
-                continue
-            prefix = _as_user_prefix(u, login)
-            sock = _socket_flag(sockets[u])
-            per_user_fmt = f"{u}{_SEP}{_FMT}"
-            if prefix:
-                parts.append(
-                    f"if {prefix}true 2>/dev/null; then "
-                    f"  {prefix}tmux {sock}ls -F '{per_user_fmt}' 2>/dev/null || true; "
-                    f"else echo '__MUXBOARD_ERR__{_SEP}{u}{_SEP}sudo refused'; fi"
-                )
-            else:
-                parts.append(f"tmux {sock}ls -F '{per_user_fmt}' 2>/dev/null || true")
-        return "; ".join(parts)
-
-    @staticmethod
-    def _parse_list_output(
-        text: str, *, host_key: str, session_order: tuple[str, ...] = ()
-    ) -> dict[str, Any]:
-        """``{sessions: {user: [ListedSession]}, errors: {user: msg}}``, each
-        user's Sessions in the Host's order."""
-        sessions_by_user: dict[str, list[ListedSession]] = {}
-        errors: dict[str, str] = {}
-        err_prefix = "__MUXBOARD_ERR__" + _SEP
-        for raw in text.splitlines():
-            line = raw.rstrip("\r")
-            if not line:
-                continue
-            if line.startswith(err_prefix):
-                _, user, msg = line.split(_SEP, 2)
-                errors[user] = msg
-                continue
-            cols = line.split(_SEP)
-            if len(cols) < 7:
-                log.debug("tmux list (%s): unparseable line %r", host_key, raw)
-                continue
-            user, name, windows, created, attached, activity, sid = cols[:7]
-            try:
-                entry = ListedSession(
-                    user=user,
-                    name=name,
-                    windows=int(windows),
-                    created=int(created),
-                    attached=int(attached) > 0,
-                    activity=int(activity),
-                    id=sid,
-                )
-            except ValueError:
-                log.debug("tmux list (%s): bad ints in %r", host_key, raw)
-                continue
-            sessions_by_user.setdefault(user, []).append(entry)
-        for sessions in sessions_by_user.values():
-            sessions.sort(key=lambda e: _order_key(e.name, session_order))
-        return {"sessions": sessions_by_user, "errors": errors}
 
     def list_host(self, host: Host) -> Listing:
         """List ``host``'s Sessions. Every failure is a Listing too, never raised."""
@@ -445,7 +209,8 @@ class TmuxController:
             return Listing.worked(
                 host, sessions={}, errors=socket_errors, elapsed_ms=_elapsed_ms(start)
             )
-        argv, env_add = self._build_argv(host, self._list_script(host, sockets))
+        script = tmuxscript.listing_script(sockets, host.tmux_users, self._login_user(host))
+        argv, env_add = self._build_argv(host, script)
         env = {**os.environ, **env_add} if env_add else None
         try:
             r = subprocess.run(
@@ -459,13 +224,11 @@ class TmuxController:
         if r.returncode != 0 and not r.stdout.strip():
             tail = (r.stderr.strip().splitlines() or ["unknown"])[-1]
             return self._list_fail(host, f"exit {r.returncode}: {tail}", start)
-        parsed = self._parse_list_output(
-            r.stdout, host_key=host.key, session_order=tuple(host.session_order)
-        )
+        sessions, errors = tmuxscript.read_listing(r.stdout)
         return Listing.worked(
             host,
-            sessions=parsed["sessions"],
-            errors={**socket_errors, **parsed["errors"]},
+            sessions=sessions,
+            errors={**socket_errors, **errors},
             elapsed_ms=_elapsed_ms(start),
         )
 

@@ -22,7 +22,7 @@ same app via flask-sock.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from flask import (
     Blueprint,
@@ -40,7 +40,7 @@ from .auth import Authorizer, Principal, deny_all
 from .inventory import Host
 from .sweep import Sweep
 from .tmuxctl import TmuxController
-from .ttyproxy import AttachCapacityExceeded, SlotManager, bridge, error_close
+from .ttyproxy import AttachRunner, AuditHook
 
 log = logging.getLogger("muxboard")
 
@@ -63,9 +63,6 @@ OSC52_READ_WRITE = "read-write"
 OSC52_MODES = frozenset({OSC52_OFF, OSC52_WRITE, OSC52_READ_WRITE})
 # Clipboard push cap: a login URL fits; a dumped secret file does not.
 OSC52_PUSH_MAX_BYTES = 64 * 1024
-
-# Audit hook signature: (event_name, **fields) -> None.
-AuditHook = Callable[..., None]
 
 
 def _noop_audit(_event: str, **_fields: Any) -> None:
@@ -129,13 +126,15 @@ class Muxboard:
         )
         self.sweep = Sweep(hosts, self.controller.list_host, sweep_interval)
         self.authorize = authorize
-        self.slots = SlotManager(
-            max_per_user=attach_max_per_user, max_global=attach_max_global
-        )
         self.allowed_origins = (
             {o.rstrip("/") for o in allowed_origins} if allowed_origins else None
         )
         self.audit = audit or _noop_audit
+        self.attach_runner = AttachRunner(
+            max_per_user=attach_max_per_user,
+            max_global=attach_max_global,
+            audit=self.audit,
+        )
         self.home_url = home_url
         self.home_label = home_label
         self.osc52 = mode
@@ -334,27 +333,14 @@ class Muxboard:
                             principal.name, user, key)
                 _ws_close(ws, 4003, "forbidden user")
                 return
-            try:
-                argv, env_add = self.controller.attach_argv(host, user, name)
-            except Exception as exc:  # noqa: BLE001
-                error_close(ws, str(exc))
-                return
-            try:
-                self.slots.acquire(principal.name)
-            except AttachCapacityExceeded as exc:
-                log.warning("muxboard attach refused (cap): %s by=%s", exc, principal.name)
-                error_close(ws, str(exc), code=4029)
-                return
-            self.audit("muxboard.attach.start", host=key, target_user=user,
-                       session_name=name, by=principal.name)
-            try:
-                bridge(ws, argv, env_add)
-            except Exception:  # noqa: BLE001
-                log.exception("muxboard bridge crashed")
-            finally:
-                self.slots.release(principal.name)
-                self.audit("muxboard.attach.end", host=key, target_user=user,
-                           session_name=name, by=principal.name)
+            self.attach_runner.run(
+                ws,
+                by=principal.name,
+                host=key,
+                target_user=user,
+                session_name=name,
+                attach_command=lambda: self.controller.attach_argv(host, user, name),
+            )
 
 
 def _ws_close(ws: Any, code: int, message: str) -> None:

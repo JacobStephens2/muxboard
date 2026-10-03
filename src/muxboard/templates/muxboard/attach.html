@@ -43,6 +43,7 @@
   <script src="{{ xterm.js }}"></script>
   <script src="{{ xterm.fit }}"></script>
   <script src="{{ url_for('muxboard.static', filename='muxboard/wrap-url.js') }}"></script>
+  <script src="{{ url_for('muxboard.static', filename='muxboard/attach.js') }}"></script>
   {% if osc52 != "off" %}
   <script src="{{ xterm.clipboard }}"></script>
   {% endif %}
@@ -50,6 +51,7 @@
   (function () {
     'use strict';
 
+    var mb = window.mbAttach;
     var BASE = {{ base | tojson }};
     var HOST_KEY = {{ host_key | tojson }};
     var TMUX_USER = {{ tmux_user | tojson }};
@@ -147,49 +149,17 @@
     var fitAddon = new window.FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    function isMac() {
-      return /Mac|iPhone|iPad/.test(navigator.platform || '');
-    }
-
-    function modifierHeld(ev) {
-      return isMac() ? !!(ev && ev.metaKey) : !!(ev && ev.ctrlKey);
-    }
-
-    function openLink(ev, uri) {
-      if (!modifierHeld(ev)) return;
-      var url;
-      try { url = new URL(uri); } catch (e) { return; }
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
-      window.open(url.href, '_blank', 'noopener,noreferrer');
-    }
-
-    function setLinkTitle(text) { termEl.title = text || ''; }
-
-    term.options.linkHandler = {
-      activate: openLink,
-      hover: function (_ev, text) { setLinkTitle(text); },
-      leave: function () { setLinkTitle(''); },
-      allowNonHttpProtocols: false,
-    };
+    var links = mb.links({
+      platform: navigator.platform || '',
+      open: function (url, target, features) { window.open(url, target, features); },
+      title: function (text) { termEl.title = text; },
+    });
+    term.options.linkHandler = links.handler;
 
     term.open(termEl);
     fitAddon.fit();
 
-    // Regex Links: join xterm soft wrap and Session hard wrap (Claude login
-    // URLs). WebLinksAddon only concatenates isWrapped rows, so a TUI newline
-    // at cols made the Link the first line. OSC 8 still uses linkHandler.
-    term.registerLinkProvider({
-      provideLinks: function (y, callback) {
-        if (!window.mbWrapUrl) { callback(undefined); return; }
-        var rows = window.mbWrapUrl.bufferLines(term);
-        var links = window.mbWrapUrl.linksOnLine(rows, y - 1, term.cols, openLink);
-        links.forEach(function (link) {
-          link.hover = function (_ev, text) { setLinkTitle(text); };
-          link.leave = function () { setLinkTitle(''); };
-        });
-        callback(links.length ? links : undefined);
-      }
-    });
+    term.registerLinkProvider(links.provider(term));
 
     function syncCopyBtn() {
       if (!copyBtn) return;
@@ -200,28 +170,22 @@
       copyBtn.textContent = 'Copy';
     }
 
+    function copied() {
+      if (!copyBtn) return;
+      copyBtn.textContent = 'Copied';
+      copyBtn.disabled = !term.hasSelection();
+      if (copiedTimer) clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(function () {
+        copiedTimer = null;
+        syncCopyBtn();
+      }, 1500);
+    }
+
     function doCopy() {
-      var text = term.getSelection();
-      if (window.mbWrapUrl && window.mbWrapUrl.copyText) {
-        text = window.mbWrapUrl.copyText(text);
-      }
-      if (!text) return;
-      function ok() {
-        if (!copyBtn) return;
-        copyBtn.textContent = 'Copied';
-        copyBtn.disabled = !term.hasSelection();
-        if (copiedTimer) clearTimeout(copiedTimer);
-        copiedTimer = setTimeout(function () {
-          copiedTimer = null;
-          syncCopyBtn();
-        }, 1500);
-      }
-      function fail() { flashStatus('copy failed'); }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(ok).catch(fail);
-      } else {
-        fail();
-      }
+      mb.copy(term, navigator.clipboard).then(function (outcome) {
+        if (outcome === 'copied') copied();
+        else if (outcome === 'failed') flashStatus('copy failed');
+      });
     }
 
     if (copyBtn) {
@@ -233,21 +197,13 @@
     term.onSelectionChange(syncCopyBtn);
 
     term.attachCustomKeyEventHandler(function (ev) {
-      if (ev.type !== 'keydown') return true;
-      var chord = (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey &&
-                  (ev.key === 'c' || ev.key === 'C');
-      if (chord && term.hasSelection()) {
+      if (mb.isCopyChord(ev, term.hasSelection())) {
         ev.preventDefault();
         doCopy();
         return false;
       }
       return true;
     });
-
-    function utf8Bytes(s) {
-      try { return new TextEncoder().encode(s || '').length; }
-      catch (e) { return (s || '').length; }
-    }
 
     function promptClipQuery() {
       var dlg = document.querySelector('[data-mb-clip-query]');
@@ -276,32 +232,13 @@
     }
 
     if (OSC52 !== 'off' && window.ClipboardAddon) {
-      var provider = {
-        readText: function (sel) {
-          // Reject (do not resolve '') so ClipboardAddon does not inject an
-          // empty OSC 52 reply into the Session. Deny means no read.
-          if (OSC52 !== 'read-write' || sel !== 'c') {
-            return Promise.reject(new Error('clipboard query disabled'));
-          }
-          return promptClipQuery().then(function (ok) {
-            if (!ok) return Promise.reject(new Error('clipboard query denied'));
-            return navigator.clipboard.readText();
-          });
-        },
-        writeText: function (sel, text) {
-          if (sel !== 'c') return Promise.resolve();
-          var n = utf8Bytes(text);
-          if (n > OSC52_MAX) {
-            flashStatus('clipboard: refused (' + n + ' B > 64 KiB)');
-            return Promise.resolve();
-          }
-          return navigator.clipboard.writeText(text).then(function () {
-            flashStatus('clipboard: ' + n + ' B from session');
-          }).catch(function () {
-            flashStatus('clipboard: write failed');
-          });
-        },
-      };
+      var provider = mb.clipboardProvider({
+        mode: OSC52,
+        max: OSC52_MAX,
+        prompt: promptClipQuery,
+        clipboard: navigator.clipboard,
+        notify: flashStatus,
+      });
       term.loadAddon(new window.ClipboardAddon.ClipboardAddon(undefined, provider));
     }
 
@@ -326,20 +263,16 @@
     });
 
     ws.addEventListener('message', function (ev) {
-      var data = ev.data;
-      if (data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(data));
-      } else if (typeof data === 'string') {
-        try {
-          var obj = JSON.parse(data);
-          if (obj && obj.type === 'error') {
-            term.writeln('\r\n\x1b[31m[bridge error] ' + obj.message + '\x1b[0m');
-            return;
-          }
-        } catch (e) { /* not JSON - raw text */ }
-        term.write(data);
-      } else if (data && data.arrayBuffer) {
-        data.arrayBuffer().then(function (buf) { term.write(new Uint8Array(buf)); });
+      var frame = mb.decode(ev.data);
+      if (!frame) return;
+      if (frame.type === 'bytes') {
+        term.write(frame.bytes);
+      } else if (frame.type === 'error') {
+        term.writeln('\r\n\x1b[31m[bridge error] ' + frame.message + '\x1b[0m');
+      } else if (frame.type === 'text') {
+        term.write(frame.text);
+      } else if (frame.type === 'blob') {
+        frame.bytes.then(function (bytes) { term.write(bytes); });
       }
     });
 
@@ -357,13 +290,13 @@
 
     term.onData(function (data) {
       if (!connected) return;
-      ws.send(JSON.stringify({ type: 'input', data: data }));
+      ws.send(mb.encodeInput(data));
     });
 
     function sendResize() {
       if (!connected) return;
       fitAddon.fit();
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      ws.send(mb.encodeResize(term.cols, term.rows));
     }
 
     var resizeT = null;
@@ -373,7 +306,7 @@
     });
 
     setInterval(function () {
-      if (connected) { try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {} }
+      if (connected) { try { ws.send(mb.encodePing()); } catch (e) {} }
     }, 30000);
   })();
   </script>

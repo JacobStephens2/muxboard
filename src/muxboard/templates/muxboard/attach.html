@@ -51,7 +51,7 @@
   (function () {
     'use strict';
 
-    var mb = window.mbAttach;
+    var attachClient = window.mbAttach;
     var BASE = {{ base | tojson }};
     var HOST_KEY = {{ host_key | tojson }};
     var TMUX_USER = {{ tmux_user | tojson }};
@@ -149,7 +149,7 @@
     var fitAddon = new window.FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    var links = mb.links({
+    var links = attachClient.links({
       platform: navigator.platform || '',
       open: function (url, target, features) { window.open(url, target, features); },
       title: function (text) { termEl.title = text; },
@@ -170,7 +170,7 @@
       copyBtn.textContent = 'Copy';
     }
 
-    function copied() {
+    function showCopied() {
       if (!copyBtn) return;
       copyBtn.textContent = 'Copied';
       copyBtn.disabled = !term.hasSelection();
@@ -182,8 +182,8 @@
     }
 
     function doCopy() {
-      mb.copy(term, navigator.clipboard).then(function (outcome) {
-        if (outcome === 'copied') copied();
+      attachClient.copy(term, navigator.clipboard).then(function (outcome) {
+        if (outcome === 'copied') showCopied();
         else if (outcome === 'failed') flashStatus('copy failed');
       });
     }
@@ -197,7 +197,7 @@
     term.onSelectionChange(syncCopyBtn);
 
     term.attachCustomKeyEventHandler(function (ev) {
-      if (mb.isCopyChord(ev, term.hasSelection())) {
+      if (attachClient.isCopyChord(ev, term.hasSelection())) {
         ev.preventDefault();
         doCopy();
         return false;
@@ -232,7 +232,7 @@
     }
 
     if (OSC52 !== 'off' && window.ClipboardAddon) {
-      var provider = mb.clipboardProvider({
+      var provider = attachClient.clipboardProvider({
         mode: OSC52,
         max: OSC52_MAX,
         prompt: promptClipQuery,
@@ -263,7 +263,7 @@
     });
 
     ws.addEventListener('message', function (ev) {
-      var frame = mb.decode(ev.data);
+      var frame = attachClient.decode(ev.data);
       if (!frame) return;
       if (frame.type === 'bytes') {
         term.write(frame.bytes);
@@ -290,13 +290,13 @@
 
     term.onData(function (data) {
       if (!connected) return;
-      ws.send(mb.encodeInput(data));
+      ws.send(attachClient.encodeInput(data));
     });
 
     function sendResize() {
       if (!connected) return;
       fitAddon.fit();
-      ws.send(mb.encodeResize(term.cols, term.rows));
+      ws.send(attachClient.encodeResize(term.cols, term.rows));
     }
 
     var resizeT = null;
@@ -306,7 +306,7 @@
     });
 
     setInterval(function () {
-      if (connected) { try { ws.send(mb.encodePing()); } catch (e) {} }
+      if (connected) { try { ws.send(attachClient.encodePing()); } catch (e) {} }
     }, 30000);
   })();
   </script>

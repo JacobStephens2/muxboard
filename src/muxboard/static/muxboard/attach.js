@@ -17,7 +17,7 @@
 
   if (!wrap) throw new Error("mbAttach: wrap-url.js must load first");
 
-  function need(env, name, type) {
+  function requireDep(env, name, type) {
     if (!env || typeof env[name] !== type) {
       throw new TypeError("mbAttach: " + name + " must be a " + type);
     }
@@ -30,9 +30,9 @@
 
   // Link activation: Cmd on macOS, Ctrl elsewhere; http(s) only.
   function links(env) {
-    var platform = need(env, "platform", "string");
-    var open = need(env, "open", "function");
-    var title = need(env, "title", "function");
+    var platform = requireDep(env, "platform", "string");
+    var open = requireDep(env, "open", "function");
+    var title = requireDep(env, "title", "function");
     var mac = isMac(platform);
 
     function modifierHeld(ev) {
@@ -108,10 +108,10 @@
 
   // ClipboardAddon provider: Clipboard push and Clipboard query (ADR-0001).
   function clipboardProvider(env) {
-    var mode = need(env, "mode", "string");
-    var max = need(env, "max", "number");
-    var prompt = need(env, "prompt", "function");
-    var notify = need(env, "notify", "function");
+    var mode = requireDep(env, "mode", "string");
+    var max = requireDep(env, "max", "number");
+    var prompt = requireDep(env, "prompt", "function");
+    var notify = requireDep(env, "notify", "function");
     var clipboard = env.clipboard;
 
     return {

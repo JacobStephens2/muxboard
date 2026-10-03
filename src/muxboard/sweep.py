@@ -100,8 +100,9 @@ class Sweep:
                 users = list(h.tmux_users)
                 if allowed is not None:
                     users = [u for u in users if u in allowed]
-                    if result:
-                        result = _scope_result(result, allowed)
+                if result:
+                    # A copy, so a caller holding the view cannot edit the store.
+                    result = _scope_result(result, allowed)
                 hosts.append({
                     "key": h.key,
                     "hostname": h.hostname,
@@ -144,7 +145,11 @@ class Sweep:
                 time.sleep(self._interval)
 
 
-def _scope_result(result: dict[str, Any], allowed: frozenset[str]) -> dict[str, Any]:
+def _scope_result(
+    result: dict[str, Any], allowed: Optional[frozenset[str]]
+) -> dict[str, Any]:
+    if allowed is None:
+        return dict(result)
     return {
         **result,
         "sessions": {u: v for u, v in (result.get("sessions") or {}).items() if u in allowed},

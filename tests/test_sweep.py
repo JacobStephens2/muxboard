@@ -158,6 +158,13 @@ def test_unscoped_principal_sees_everything():
     assert host["result"]["users"] == ["alice", "bob"]
 
 
+def test_editing_a_view_leaves_the_store_alone():
+    sweep = _sweep([_host("a")])
+    sweep.refresh()
+    sweep.view(_ADMIN)["hosts"][0]["result"]["ok"] = False
+    assert _results(sweep)["a"]["ok"] is True
+
+
 def test_start_twice_starts_one_loop(monkeypatch):
     started = []
     real_thread = threading.Thread

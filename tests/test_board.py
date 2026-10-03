@@ -124,6 +124,21 @@ def test_create_returns_created_name():
     assert listed == ["local"]
 
 
+def test_create_emits_the_create_audit_event():
+    audited = []
+    app, board = _app(lambda r: Principal(name="u"),
+                      audit=lambda event, **fields: audited.append((event, fields)))
+    board.controller.create_session = lambda host, user, name, command=None: None
+    _fake_sweep(board)
+
+    r = app.test_client().post("/mux/api/local/alice/create",
+                               data={"name": "new1", "command": "htop"})
+    assert r.status_code == 200
+    assert audited == [("muxboard.create", {"host": "local", "target_user": "alice",
+                                            "session_name": "new1", "command": "htop",
+                                            "by": "u"})]
+
+
 def test_refresh_without_key_sweeps_every_host():
     app, board = _app(lambda r: Principal(name="admin"))
     listed = _fake_sweep(board)
@@ -190,6 +205,20 @@ def test_kill_success_returns_ok():
     assert r.get_json() == {"ok": True}
     assert called == {"host": "local", "user": "alice", "name": "work"}
     assert listed == ["local"]
+
+
+def test_kill_emits_the_kill_audit_event():
+    audited = []
+    app, board = _app(lambda r: Principal(name="admin"),
+                      audit=lambda event, **fields: audited.append((event, fields)))
+    board.controller.kill_session = lambda host, user, name: None
+    _fake_sweep(board)
+
+    r = app.test_client().post("/mux/api/local/alice/kill",
+                               data={"name": "work", "confirm": "work"})
+    assert r.status_code == 200
+    assert audited == [("muxboard.kill", {"host": "local", "target_user": "alice",
+                                          "session_name": "work", "by": "admin"})]
 
 
 def test_kill_controller_error_returns_ok_false():

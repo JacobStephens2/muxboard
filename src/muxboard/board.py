@@ -38,6 +38,7 @@ from flask import (
 
 from .auth import Authorizer, Principal, deny_all
 from .inventory import Host
+from .mutation import MutationRunner
 from .sweep import Sweep
 from .tmuxctl import TmuxController
 from .ttyproxy import AttachRunner, AuditHook
@@ -135,6 +136,13 @@ class Muxboard:
             max_global=attach_max_global,
             audit=self.audit,
         )
+        # The refresh goes through self.sweep at call time, so a Sweep swapped
+        # in after construction (as the tests do) is the one refreshed.
+        self.mutation_runner = MutationRunner(
+            self.controller,
+            refresh=lambda key: self.sweep.refresh(key),
+            audit=self.audit,
+        )
         self.home_url = home_url
         self.home_label = home_label
         self.osc52 = mode
@@ -230,25 +238,14 @@ class Muxboard:
         @bp.route("/api/<key>/<user>/kill", methods=["POST"])
         def api_kill(key: str, user: str):
             principal, host = self._guard_mutation(key, user)
-            name = (request.form.get("name") or "").strip()
-            if not name:
-                abort(400, description="missing name")
-            # Defense-in-depth: the client must echo the session name in
-            # `confirm`. Blocks accidental same-site POSTs (a future XSS, a
-            # fat-fingered curl, a malicious browser extension).
-            confirm = (request.form.get("confirm") or "").strip()
-            if confirm != name:
-                return jsonify({
-                    "ok": False,
-                    "error": f"confirm must echo the session name ({name!r}); got {confirm!r}",
-                }), 400
-            try:
-                self.controller.kill_session(host, user, name)
-            except Exception as exc:  # noqa: BLE001
-                return jsonify({"ok": False, "error": str(exc)}), 400
-            self.sweep.refresh(key)
-            self.audit("muxboard.kill", host=key, target_user=user,
-                       session_name=name, by=principal.name)
+            result = self.mutation_runner.kill(
+                host, user,
+                name=request.form.get("name"),
+                confirm=request.form.get("confirm"),
+                by=principal.name,
+            )
+            if not result.ok:
+                return jsonify({"ok": False, "error": result.error}), 400
             return jsonify({"ok": True})
 
         @bp.route("/api/<key>/<user>/create", methods=["POST"])
@@ -256,18 +253,15 @@ class Muxboard:
             principal, host = self._guard_mutation(key, user)
             if not principal.may_create(user):
                 abort(403)
-            name = (request.form.get("name") or "").strip()
-            command = (request.form.get("command") or "").strip() or None
-            if not name:
-                abort(400, description="missing name")
-            try:
-                self.controller.create_session(host, user, name, command)
-            except Exception as exc:  # noqa: BLE001
-                return jsonify({"ok": False, "error": str(exc)}), 400
-            self.sweep.refresh(key)
-            self.audit("muxboard.create", host=key, target_user=user,
-                       session_name=name, command=command, by=principal.name)
-            return jsonify({"ok": True, "name": name})
+            result = self.mutation_runner.create(
+                host, user,
+                name=request.form.get("name"),
+                command=request.form.get("command"),
+                by=principal.name,
+            )
+            if not result.ok:
+                return jsonify({"ok": False, "error": result.error}), 400
+            return jsonify({"ok": True, "name": result.name})
 
         @bp.route("/<key>/<user>/<path:name>/attach")
         def attach_view(key: str, user: str, name: str):

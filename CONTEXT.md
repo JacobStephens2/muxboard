@@ -40,6 +40,10 @@ _Avoid_: terminal tab, replay, log view
 An operator action that ends a Session on its Host. The request echoes the Session name as confirmation; a mismatch is refused. On the Dashboard the operator first types the Session name, and nothing is sent until it matches; that typed-name gate is the client's, separate from the request's echo.
 _Avoid_: delete, terminate, close
 
+**Mutation**:
+A Kill or a create, an operator action that changes which Sessions a Host has. It is refreshed into the Host's Listing and audited only when it succeeds.
+_Avoid_: write, change, operation
+
 **Selection**:
 The operator-highlighted span of text in an Attach. Muxboard owns this highlight; the browser's native text selection does not.
 _Avoid_: native selection, highlight

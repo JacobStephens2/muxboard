@@ -181,6 +181,13 @@ def test_kill_missing_name_400():
     assert r.status_code == 400
 
 
+def test_kill_missing_name_is_a_json_refusal():
+    app, _ = _app(lambda r: Principal(name="admin"))
+    r = app.test_client().post("/mux/api/local/alice/kill", data={"confirm": "x"})
+    assert r.status_code == 400
+    assert r.get_json() == {"ok": False, "error": "missing name"}
+
+
 def test_kill_requires_confirm_echo():
     app, _ = _app(lambda r: Principal(name="admin"))
     client = app.test_client()

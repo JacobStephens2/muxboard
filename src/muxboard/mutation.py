@@ -90,7 +90,7 @@ class MutationRunner:
             self._controller.kill_session(host, user, name)
         except Exception as exc:  # noqa: BLE001
             return MutationResult.refused(str(exc))
-        self._succeeded("muxboard.kill", host=host.key, target_user=user,
+        self._succeeded("muxboard.kill", key=host.key, target_user=user,
                         session_name=name, by=by)
         return MutationResult.success()
 
@@ -112,13 +112,13 @@ class MutationRunner:
             self._controller.create_session(host, user, name, command)
         except Exception as exc:  # noqa: BLE001
             return MutationResult.refused(str(exc))
-        self._succeeded("muxboard.create", host=host.key, target_user=user,
+        self._succeeded("muxboard.create", key=host.key, target_user=user,
                         session_name=name, command=command, by=by)
         return MutationResult.success(name)
 
-    def _succeeded(self, event: str, *, host: str, **fields: Any) -> None:
-        self._refresh(host)
+    def _succeeded(self, event: str, *, key: str, **fields: Any) -> None:
+        self._refresh(key)
         try:
-            self._audit(event, host=host, **fields)
+            self._audit(event, host=key, **fields)
         except Exception:  # noqa: BLE001
-            log.exception("muxboard %s audit failed", event)
+            log.exception("%s audit failed", event)

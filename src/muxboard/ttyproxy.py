@@ -2,8 +2,9 @@
 
 The board's ``/ws/<key>/<user>/<name>`` route checks access, then hands its
 WebSocket connection to :meth:`AttachRunner.run`, which takes an attach slot,
-audits, and drives :func:`bridge`. The bridge spawns the attach command (``ssh -tt ... tmux attach`` or
-a local ``tmux attach`` under :mod:`pty`) and shuttle bytes:
+audits, and drives :func:`bridge`. The bridge spawns the attach command
+(``ssh -tt ... tmux attach`` or a local ``tmux attach`` under :mod:`pty`) and
+shuttles bytes:
 
   - Browser -> server:  text JSON ``{"type":"input","data":"..."}`` for
                         keystrokes and ``{"type":"resize","cols":N,"rows":N}``
@@ -305,6 +306,9 @@ def bridge(
         log.info("muxboard: bridge closed (exit=%s)", proc.returncode)
 
 
+# Audit hook signature: (event_name, **fields) -> None.
+AuditHook = Callable[..., None]
+
 # The attach command callable: () -> (argv, extra environment).
 AttachCommand = Callable[[], "tuple[list[str], dict[str, str]]"]
 
@@ -325,7 +329,7 @@ class AttachRunner:
         *,
         max_per_user: int,
         max_global: int,
-        audit: Callable[..., None],
+        audit: AuditHook,
     ) -> None:
         self._slots = SlotManager(max_per_user=max_per_user, max_global=max_global)
         self._audit = audit

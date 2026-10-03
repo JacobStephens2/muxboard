@@ -369,12 +369,11 @@ class RecordingAudit:
         return [event for event, _ in self.events]
 
 
-class AttachCommand:
+class CountingAttachCommand:
     """The runner's zero-argument attach command callable; counts its calls."""
 
-    def __init__(self, argv=None, env=None, raises=None) -> None:
+    def __init__(self, argv=None, raises=None) -> None:
         self.argv = argv or _EXIT_NOW
-        self.env = env or {}
         self.raises = raises
         self.calls = 0
 
@@ -382,48 +381,42 @@ class AttachCommand:
         self.calls += 1
         if self.raises is not None:
             raise self.raises
-        return self.argv, self.env
+        return self.argv, {}
 
 
-def _runner(audit=None, *, max_per_user=1, max_global=1) -> AttachRunner:
-    return AttachRunner(max_per_user=max_per_user, max_global=max_global,
-                        audit=audit or RecordingAudit())
+def _runner(audit=None) -> AttachRunner:
+    return AttachRunner(max_per_user=1, max_global=1, audit=audit or RecordingAudit())
 
 
-def _run(runner, ws, command, by="alice") -> None:
-    t = threading.Thread(
-        target=runner.run,
-        args=(ws,),
-        kwargs={"by": by, "host": "local", "target_user": "deploy",
-                "session_name": "work", "attach_command": command},
-        daemon=True,
-    )
+def _start_run(runner, ws, command) -> threading.Thread:
+    t = threading.Thread(target=runner.run, args=(ws,),
+                         kwargs={**_FIELDS, "attach_command": command}, daemon=True)
     t.start()
-    _join(t)
+    return t
+
+
+def _run(runner, ws, command) -> None:
+    _join(_start_run(runner, ws, command))
 
 
 def _errors(ws) -> list:
     return [json.loads(f)["message"] for f in ws.sent if isinstance(f, str)]
 
 
-def _assert_slot_free(runner, by="alice") -> None:
-    command = AttachCommand()
+def _assert_slot_free(runner) -> None:
+    command = CountingAttachCommand()
     ws = FakeWebSocket()
-    _run(runner, ws, command, by=by)
+    _run(runner, ws, command)
     assert command.calls == 1, f"slot still held: {ws.sent!r} {ws.closed!r}"
 
 
 def test_runner_normal_run_emits_start_and_end_and_frees_the_slot():
     audit = RecordingAudit()
     runner = _runner(audit)
-    command = AttachCommand(argv=_ECHO_LINES)
+    command = CountingAttachCommand(argv=_ECHO_LINES)
     ws = FakeWebSocket()
     ws.push_json({"type": "input", "data": "hi\n"})
-    t = threading.Thread(
-        target=runner.run, args=(ws,),
-        kwargs={**_FIELDS, "attach_command": command}, daemon=True,
-    )
-    t.start()
+    t = _start_run(runner, ws, command)
     try:
         ws.wait_for("got:hi")
         assert audit.events == [("muxboard.attach.start", _FIELDS)]
@@ -440,15 +433,11 @@ def test_runner_at_cap_refuses_with_4029_before_building_the_command():
     audit = RecordingAudit()
     runner = _runner(audit)
     holder = FakeWebSocket()
-    t = threading.Thread(
-        target=runner.run, args=(holder,),
-        kwargs={**_FIELDS, "attach_command": AttachCommand(argv=_ECHO_LINES)}, daemon=True,
-    )
-    t.start()
+    t = _start_run(runner, holder, CountingAttachCommand(argv=_ECHO_LINES))
     try:
         holder.push_json({"type": "input", "data": "up\n"})
         holder.wait_for("got:up")
-        command = AttachCommand()
+        command = CountingAttachCommand()
         ws = FakeWebSocket()
         _run(runner, ws, command)
         assert command.calls == 0
@@ -465,7 +454,7 @@ def test_runner_command_failure_closes_plainly_with_its_text_and_frees_the_slot(
     audit = RecordingAudit()
     runner = _runner(audit)
     ws = FakeWebSocket()
-    _run(runner, ws, AttachCommand(raises=ValueError("no such session: work")))
+    _run(runner, ws, CountingAttachCommand(raises=ValueError("no such session: work")))
     assert _errors(ws) == ["no such session: work"]
     assert ws.closed == [(None, None)]
     assert audit.events == []
@@ -477,9 +466,9 @@ def test_runner_start_audit_failure_blocks_the_bridge_and_frees_the_slot(tmp_pat
     audit = RecordingAudit("muxboard.attach.start")
     runner = _runner(audit)
     ws = FakeWebSocket()
-    _run(runner, ws, AttachCommand(argv=["sh", "-c", f'touch "{marker}"']))
+    _run(runner, ws, CountingAttachCommand(argv=["sh", "-c", f'touch "{marker}"']))
     assert not marker.exists()
-    assert len(_errors(ws)) == 1
+    assert _errors(ws) == ["attach failed"]
     assert ws.closed == [(None, None)]
     assert audit.names() == ["muxboard.attach.start"]
     audit.raise_on.clear()
@@ -490,7 +479,7 @@ def test_runner_bridge_failure_sends_error_frame_emits_end_and_frees_the_slot():
     audit = RecordingAudit()
     runner = _runner(audit)
     ws = FakeWebSocket()
-    _run(runner, ws, AttachCommand(argv=["muxboard-no-such-command-29"]))
+    _run(runner, ws, CountingAttachCommand(argv=["muxboard-no-such-command-29"]))
     assert _errors(ws) == ["attach failed"]
     assert ws.closed == [(None, None)]
     assert audit.events == [("muxboard.attach.start", _FIELDS), ("muxboard.attach.end", _FIELDS)]
@@ -501,7 +490,7 @@ def test_runner_end_audit_failure_is_swallowed_and_the_slot_is_free():
     audit = RecordingAudit("muxboard.attach.end")
     runner = _runner(audit)
     ws = FakeWebSocket()
-    _run(runner, ws, AttachCommand())
+    _run(runner, ws, CountingAttachCommand())
     assert audit.names() == ["muxboard.attach.start", "muxboard.attach.end"]
     assert _errors(ws) == []
     _assert_slot_free(runner)

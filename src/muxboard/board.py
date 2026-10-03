@@ -22,7 +22,7 @@ same app via flask-sock.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from flask import (
     Blueprint,
@@ -40,7 +40,7 @@ from .auth import Authorizer, Principal, deny_all
 from .inventory import Host
 from .sweep import Sweep
 from .tmuxctl import TmuxController
-from .ttyproxy import AttachRunner
+from .ttyproxy import AttachRunner, AuditHook
 
 log = logging.getLogger("muxboard")
 
@@ -63,9 +63,6 @@ OSC52_READ_WRITE = "read-write"
 OSC52_MODES = frozenset({OSC52_OFF, OSC52_WRITE, OSC52_READ_WRITE})
 # Clipboard push cap: a login URL fits; a dumped secret file does not.
 OSC52_PUSH_MAX_BYTES = 64 * 1024
-
-# Audit hook signature: (event_name, **fields) -> None.
-AuditHook = Callable[..., None]
 
 
 def _noop_audit(_event: str, **_fields: Any) -> None:

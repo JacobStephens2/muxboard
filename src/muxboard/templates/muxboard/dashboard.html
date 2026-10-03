@@ -129,7 +129,7 @@
     var BASE = (document.body.getAttribute('data-muxboard-base') || '').replace(/\/$/, '');
 
     var killDialog = $('[data-mb-kill-dialog]');
-    var newDialog = $('[data-mb-new-dialog]');
+    var createDialog = $('[data-mb-new-dialog]');
     var refreshBtn = $('[data-mb-refresh]');
 
     // Show or close a dialog to match state.open; true when it just opened.
@@ -144,7 +144,7 @@
       el.textContent = msg || '';
     }
 
-    var board = dashboardClient.controller({
+    var dashboard = dashboardClient.controller({
       sessions: window.mbSessions.client({ fetch: window.fetch.bind(window), base: BASE }),
       // sessionStorage itself can throw in some browser modes, so reach it per call.
       storage: {
@@ -171,19 +171,19 @@
           if (syncDialog(killDialog, state.open)) input.focus();
         },
         create: function (state) {
-          if (!newDialog) return;
-          var nameInput = $('[data-mb-new-name]', newDialog);
+          if (!createDialog) return;
+          var nameInput = $('[data-mb-new-name]', createDialog);
           if (state.target) {
-            $('[data-mb-new-host-label]', newDialog).textContent = state.target.host;
-            $('[data-mb-new-user-label]', newDialog).textContent = state.target.user;
+            $('[data-mb-new-host-label]', createDialog).textContent = state.target.host;
+            $('[data-mb-new-user-label]', createDialog).textContent = state.target.user;
           }
           nameInput.value = state.name;
-          $('[data-mb-new-cmd]', newDialog).value = state.command;
-          renderError($('[data-mb-new-error]', newDialog), state.error);
-          var go = $('[data-mb-new-go]', newDialog);
+          $('[data-mb-new-cmd]', createDialog).value = state.command;
+          renderError($('[data-mb-new-error]', createDialog), state.error);
+          var go = $('[data-mb-new-go]', createDialog);
           go.disabled = state.busy;
           go.textContent = state.goLabel;
-          if (syncDialog(newDialog, state.open)) nameInput.focus();
+          if (syncDialog(createDialog, state.open)) nameInput.focus();
         },
         refresh: function (state) {
           if (!refreshBtn) return;
@@ -205,7 +205,7 @@
 
     // ---------- highlight the just-created session ----------
 
-    var want = board.justCreated();
+    var want = dashboard.justCreated();
     var row = want && $$('tr[data-mb-sess-host]').filter(function (r) {
       return r.getAttribute('data-mb-sess-host') === want.host &&
              r.getAttribute('data-mb-sess-user') === want.user &&
@@ -231,46 +231,46 @@
     // ---------- wire up ----------
 
     // Escape closes a dialog without a Cancel click.
-    if (killDialog) killDialog.addEventListener('close', function () { board.cancelKill(); });
-    if (newDialog) newDialog.addEventListener('close', function () { board.cancelCreate(); });
+    if (killDialog) killDialog.addEventListener('close', function () { dashboard.cancelKill(); });
+    if (createDialog) createDialog.addEventListener('close', function () { dashboard.cancelCreate(); });
 
     function submitCreate() {
-      board.submitCreate($('[data-mb-new-name]', newDialog).value, $('[data-mb-new-cmd]', newDialog).value);
+      dashboard.submitCreate($('[data-mb-new-name]', createDialog).value, $('[data-mb-new-cmd]', createDialog).value);
     }
 
     document.addEventListener('click', function (ev) {
       var t = ev.target;
       if (!t || !t.closest) return;
-      if (t.closest('[data-mb-refresh]')) { ev.preventDefault(); board.refresh(); return; }
+      if (t.closest('[data-mb-refresh]')) { ev.preventDefault(); dashboard.refresh(); return; }
       var kb = t.closest('[data-mb-kill-host]');
       if (kb) {
         ev.preventDefault();
-        board.openKill({
+        dashboard.openKill({
           host: kb.getAttribute('data-mb-kill-host'),
           user: kb.getAttribute('data-mb-kill-user'),
           name: kb.getAttribute('data-mb-kill-name'),
         });
         return;
       }
-      if (t.closest('[data-mb-kill-cancel]')) { ev.preventDefault(); board.cancelKill(); return; }
+      if (t.closest('[data-mb-kill-cancel]')) { ev.preventDefault(); dashboard.cancelKill(); return; }
       if (t.closest('[data-mb-kill-go]')) {
         ev.preventDefault();
-        board.confirmKill($('[data-mb-kill-confirm]', killDialog).value);
+        dashboard.confirmKill($('[data-mb-kill-confirm]', killDialog).value);
         return;
       }
-      var nb = t.closest('[data-mb-new-host]');
-      if (nb) {
+      var cb = t.closest('[data-mb-new-host]');
+      if (cb) {
         ev.preventDefault();
-        board.openCreate({ host: nb.getAttribute('data-mb-new-host'), user: nb.getAttribute('data-mb-new-user') });
+        dashboard.openCreate({ host: cb.getAttribute('data-mb-new-host'), user: cb.getAttribute('data-mb-new-user') });
         return;
       }
-      if (t.closest('[data-mb-new-cancel]')) { ev.preventDefault(); board.cancelCreate(); return; }
+      if (t.closest('[data-mb-new-cancel]')) { ev.preventDefault(); dashboard.cancelCreate(); return; }
       if (t.closest('[data-mb-new-go]')) { ev.preventDefault(); submitCreate(); return; }
     });
 
     document.addEventListener('keydown', function (ev) {
       if (ev.key !== 'Enter') return;
-      if (newDialog && newDialog.open && ev.target && ev.target.matches('[data-mb-new-name], [data-mb-new-cmd]')) {
+      if (createDialog && createDialog.open && ev.target && ev.target.matches('[data-mb-new-name], [data-mb-new-cmd]')) {
         ev.preventDefault();
         submitCreate();
       }

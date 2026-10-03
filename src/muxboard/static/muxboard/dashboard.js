@@ -20,9 +20,10 @@
 
   var NEW_SESSION_KEY = "muxboard-new-session";
 
-  function requireDep(env, name, type) {
+  // label names a nested dependency, such as "view.kill".
+  function requireDep(env, name, type, label) {
     if (!env || typeof env[name] !== type || env[name] === null) {
-      throw new TypeError("mbDashboard: " + name + " must be a " + type);
+      throw new TypeError("mbDashboard: " + (label || name) + " must be a " + type);
     }
     return env[name];
   }
@@ -50,19 +51,19 @@
   // rendered.
   function controller(env) {
     var sessions = requireDep(env, "sessions", "object");
-    requireDep(sessions, "kill", "function");
-    requireDep(sessions, "create", "function");
-    requireDep(sessions, "refresh", "function");
+    requireDep(sessions, "kill", "function", "sessions.kill");
+    requireDep(sessions, "create", "function", "sessions.create");
+    requireDep(sessions, "refresh", "function", "sessions.refresh");
     var storage = requireDep(env, "storage", "object");
-    requireDep(storage, "getItem", "function");
-    requireDep(storage, "setItem", "function");
-    requireDep(storage, "removeItem", "function");
+    requireDep(storage, "getItem", "function", "storage.getItem");
+    requireDep(storage, "setItem", "function", "storage.setItem");
+    requireDep(storage, "removeItem", "function", "storage.removeItem");
     var reload = requireDep(env, "reload", "function");
     var notify = requireDep(env, "notify", "function");
     var view = requireDep(env, "view", "object");
-    requireDep(view, "kill", "function");
-    requireDep(view, "create", "function");
-    requireDep(view, "refresh", "function");
+    requireDep(view, "kill", "function", "view.kill");
+    requireDep(view, "create", "function", "view.create");
+    requireDep(view, "refresh", "function", "view.refresh");
 
     // Each dialog's state is null while closed. A request outcome renders
     // only into the dialog that sent it, not one cancelled or reopened.
@@ -76,29 +77,28 @@
       return out;
     }
 
+    function killDialog(open, target) {
+      return { open: open, target: target, confirm: "", error: null, busy: false, goLabel: "Kill session" };
+    }
+
+    function createDialog(open, target) {
+      return {
+        open: open, target: target, name: "", command: "", error: null, busy: false, goLabel: "Create",
+      };
+    }
+
     function renderKill() {
-      view.kill(killState ? copy(killState) : {
-        open: false, target: null, confirm: "", error: null, busy: false, goLabel: "Kill session",
-      });
+      view.kill(killState ? copy(killState) : killDialog(false, null));
     }
 
     function renderCreate() {
-      view.create(createState ? copy(createState) : {
-        open: false, target: null, name: "", command: "", error: null, busy: false, goLabel: "Create",
-      });
+      view.create(createState ? copy(createState) : createDialog(false, null));
     }
 
     // ---------- Kill ----------
 
     function openKill(target) {
-      killState = {
-        open: true,
-        target: { host: target.host, user: target.user, name: target.name },
-        confirm: "",
-        error: null,
-        busy: false,
-        goLabel: "Kill session",
-      };
+      killState = killDialog(true, { host: target.host, user: target.user, name: target.name });
       renderKill();
     }
 
@@ -138,15 +138,7 @@
     // ---------- create ----------
 
     function openCreate(target) {
-      createState = {
-        open: true,
-        target: { host: target.host, user: target.user },
-        name: "",
-        command: "",
-        error: null,
-        busy: false,
-        goLabel: "Create",
-      };
+      createState = createDialog(true, { host: target.host, user: target.user });
       renderCreate();
     }
 

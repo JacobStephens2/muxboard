@@ -57,10 +57,11 @@
                   encodeURIComponent(target.user) + "/" + action, fields);
     }
 
+    function okOnly(out) { return out.ok ? { ok: true } : out; }
+
     // Kill: the request echoes the Session name as confirmation.
     function kill(target) {
-      return postSession(target, "kill", { name: target.name, confirm: target.name })
-        .then(function (out) { return out.ok ? { ok: true } : out; });
+      return postSession(target, "kill", { name: target.name, confirm: target.name }).then(okOnly);
     }
 
     // Create: resolves {ok: true, name} with the name the server created.
@@ -76,8 +77,7 @@
 
     // Refresh: sweeps every Host the Board knows.
     function refresh() {
-      return post("/api/refresh", {})
-        .then(function (out) { return out.ok ? { ok: true } : out; });
+      return post("/api/refresh", {}).then(okOnly);
     }
 
     return { kill: kill, create: create, refresh: refresh };

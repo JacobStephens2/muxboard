@@ -26,22 +26,22 @@ function fakeSessions(outcomes) {
     calls: [],
     pending: [],
     hold: false,
-    answer(kind, value) {
+    answer(value) {
       if (!s.hold) return Promise.resolve(value);
       return new Promise((resolve) => s.pending.push(() => resolve(value)));
     },
     release() { s.pending.splice(0).forEach((fn) => fn()); },
     kill(target) {
       s.calls.push(["kill", target]);
-      return s.answer("kill", o.kill || { ok: true });
+      return s.answer(o.kill || { ok: true });
     },
     create(target, command) {
       s.calls.push(["create", target, command]);
-      return s.answer("create", o.create || { ok: true, name: target.name });
+      return s.answer(o.create || { ok: true, name: target.name });
     },
     refresh() {
       s.calls.push(["refresh"]);
-      return s.answer("refresh", o.refresh || { ok: true });
+      return s.answer(o.refresh || { ok: true });
     },
   };
   return s;
@@ -395,17 +395,19 @@ function relativeCases() {
 function missingDeps() {
   const cases = [
     ["sessions", () => board({ sessions: null })],
-    ["kill", () => board({ sessions: { create() {}, refresh() {} } })],
-    ["create", () => board({ sessions: { kill() {}, refresh() {} } })],
-    ["refresh", () => board({ sessions: { kill() {}, create() {} } })],
+    ["sessions", () => board({ sessions: undefined })],
+    ["sessions.kill", () => board({ sessions: { create() {}, refresh() {} } })],
+    ["sessions.create", () => board({ sessions: { kill() {}, refresh() {} } })],
+    ["sessions.refresh", () => board({ sessions: { kill() {}, create() {} } })],
+    ["storage", () => board({ storage: null })],
     ["storage", () => board({ storage: undefined })],
-    ["getItem", () => board({ storage: { setItem() {}, removeItem() {} } })],
-    ["setItem", () => board({ storage: { getItem() {}, removeItem() {} } })],
-    ["removeItem", () => board({ storage: { getItem() {}, setItem() {} } })],
+    ["storage.getItem", () => board({ storage: { setItem() {}, removeItem() {} } })],
+    ["storage.setItem", () => board({ storage: { getItem() {}, removeItem() {} } })],
+    ["storage.removeItem", () => board({ storage: { getItem() {}, setItem() {} } })],
     ["view", () => board({ view: null })],
-    ["kill", () => board({ view: { create() {}, refresh() {} } })],
-    ["create", () => board({ view: { kill() {}, refresh() {} } })],
-    ["refresh", () => board({ view: { kill() {}, create() {} } })],
+    ["view.kill", () => board({ view: { create() {}, refresh() {} } })],
+    ["view.create", () => board({ view: { kill() {}, refresh() {} } })],
+    ["view.refresh", () => board({ view: { kill() {}, create() {} } })],
     ["reload", () => dashboard.controller({ ...board(), reload: undefined })],
     ["notify", () => dashboard.controller({ ...board(), notify: "x" })],
     ["sessions", () => dashboard.controller(null)],

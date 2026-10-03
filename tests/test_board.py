@@ -2,6 +2,7 @@ import pytest
 from flask import Flask
 
 from muxboard import Host, Muxboard, Principal
+from muxboard.sweep import Sweep
 
 
 def _app(authorize, **kwargs):
@@ -16,6 +17,29 @@ def _app(authorize, **kwargs):
     app.testing = True
     board.init_app(app, url_prefix="/mux")
     return app, board
+
+
+def _listing(host):
+    return {
+        "ok": True, "error": None,
+        "sessions": {"alice": [{"name": "a", "windows": 1, "created": 1,
+                                 "attached": False, "activity": 1, "id": "$1"}],
+                     "bob": [{"name": "b", "windows": 1, "created": 1,
+                              "attached": False, "activity": 1, "id": "$2"}]},
+        "errors": {}, "users": ["alice", "bob"], "sweep_ms": 1,
+    }
+
+
+def _fake_sweep(board, lister=_listing):
+    """Put a Sweep on a fake lister in the Board's place; return the Hosts it listed."""
+    listed = []
+
+    def record(host):
+        listed.append(host.key)
+        return lister(host)
+
+    board.sweep = Sweep(board.controller.hosts, record, interval=60)
+    return listed
 
 
 def test_deny_all_returns_401():
@@ -38,15 +62,8 @@ def test_admin_renders_dashboard():
 
 def test_scoped_principal_filters_sessions_json():
     app, board = _app(lambda r: Principal(name="u", allowed_users=frozenset({"alice"})))
-    # Seed the store as if a sweep had run.
-    board.controller._store.update("local", {
-        "ok": True, "error": None,
-        "sessions": {"alice": [{"name": "a", "windows": 1, "created": 1,
-                                 "attached": False, "activity": 1, "id": "$1"}],
-                     "bob": [{"name": "b", "windows": 1, "created": 1,
-                              "attached": False, "activity": 1, "id": "$2"}]},
-        "errors": {}, "users": ["alice", "bob"], "sweep_ms": 1,
-    })
+    _fake_sweep(board)
+    board.sweep.refresh()
     client = app.test_client()
     data = client.get("/mux/api/sessions").get_json()
     host = data["hosts"][0]
@@ -86,13 +103,42 @@ def test_create_returns_created_name():
         called.update(host=host.key, user=user, name=name, command=command)
 
     board.controller.create_session = fake_create
-    board.controller.refresh_host = lambda key: {"ok": True}
+    listed = _fake_sweep(board)
 
     client = app.test_client()
     r = client.post("/mux/api/local/alice/create", data={"name": "new1"})
     assert r.status_code == 200
     assert r.get_json() == {"ok": True, "name": "new1"}
     assert called == {"host": "local", "user": "alice", "name": "new1", "command": None}
+    assert listed == ["local"]
+
+
+def test_refresh_without_key_sweeps_every_host():
+    app, board = _app(lambda r: Principal(name="admin"))
+    listed = _fake_sweep(board)
+    r = app.test_client().post("/mux/api/refresh")
+    assert r.status_code == 200
+    assert r.get_json() == {"ok": True}
+    assert listed == ["local"]
+    assert board.sweep.view(Principal(name="admin"))["last_sweep"] is not None
+
+
+def test_refresh_known_key_refreshes_that_host():
+    app, board = _app(lambda r: Principal(name="admin"))
+    listed = _fake_sweep(board)
+    r = app.test_client().post("/mux/api/refresh?key=local")
+    assert r.status_code == 200
+    assert r.get_json() == {"ok": True, "key": "local"}
+    assert listed == ["local"]
+    assert board.sweep.view(Principal(name="admin"))["last_sweep"] is None
+
+
+def test_refresh_unknown_key_404():
+    app, board = _app(lambda r: Principal(name="admin"))
+    listed = _fake_sweep(board)
+    r = app.test_client().post("/mux/api/refresh?key=nope")
+    assert r.status_code == 404
+    assert listed == []
 
 
 def test_unknown_host_404():
@@ -125,13 +171,14 @@ def test_kill_success_returns_ok():
         called.update(host=host.key, user=user, name=name)
 
     board.controller.kill_session = fake_kill
-    board.controller.refresh_host = lambda key: {"ok": True}
+    listed = _fake_sweep(board)
 
     client = app.test_client()
     r = client.post("/mux/api/local/alice/kill", data={"name": "work", "confirm": "work"})
     assert r.status_code == 200
     assert r.get_json() == {"ok": True}
     assert called == {"host": "local", "user": "alice", "name": "work"}
+    assert listed == ["local"]
 
 
 def test_kill_controller_error_returns_ok_false():

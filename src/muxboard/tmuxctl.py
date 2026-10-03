@@ -10,8 +10,8 @@ User scoping:
     ...``. That user therefore needs a NOPASSWD sudo rule from the login user.
   - A ``local=True`` host shells out locally with no SSH hop.
 
-A background sweep refreshes an in-memory store every ``interval`` seconds;
-request handlers read the store and never block on a sweep.
+The controller lists one Host at a time; :mod:`muxboard.sweep` keeps the
+latest listing of every Host and renews it in the background.
 """
 
 from __future__ import annotations
@@ -21,12 +21,11 @@ import os
 import re
 import shlex
 import subprocess
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 from .inventory import Host, index_by_key, valid_socket_path
+from .sweep import failed_result
 
 log = logging.getLogger("muxboard.tmuxctl")
 
@@ -137,7 +136,7 @@ def _socket_flag(path: str) -> str:
 
 
 class TmuxController:
-    """Owns a board's host inventory, the background sweep, and the store."""
+    """Lists, creates, kills and attaches tmux Sessions on a board's Hosts."""
 
     def __init__(
         self,
@@ -145,18 +144,13 @@ class TmuxController:
         *,
         ssh_key: Optional[str] = None,
         ssh_timeout: int = 8,
-        interval: int = 60,
         strict_host_key_checking: bool = True,
     ) -> None:
         self.hosts = hosts
         self.by_key = index_by_key(hosts)
         self.default_ssh_key = ssh_key
         self.ssh_timeout = ssh_timeout
-        self.interval = interval
         self.strict = strict_host_key_checking
-        self._store = _TmuxStore(hosts)
-        self._thread_started = False
-        self._thread_lock = threading.Lock()
 
     # ---------- lookup ----------
 
@@ -481,11 +475,9 @@ class TmuxController:
 
     @staticmethod
     def _list_fail(host: Host, error: str, start: float) -> dict[str, Any]:
-        return {
-            "ok": False, "error": error, "sessions": {}, "errors": {},
-            "users": list(host.tmux_users),
-            "sweep_ms": int((time.monotonic() - start) * 1000),
-        }
+        return failed_result(
+            host, error, sweep_ms=int((time.monotonic() - start) * 1000)
+        )
 
     # ---------- kill / create ----------
 
@@ -541,56 +533,6 @@ class TmuxController:
         remote = f"{self._tmux_for(host, user)}attach -t {shlex.quote(name)}"
         return self._build_argv(host, remote, interactive=True)
 
-    # ---------- store + background sweep ----------
-
-    def snapshot(self) -> dict[str, Any]:
-        return self._store.snapshot()
-
-    def refresh_host(self, key: str) -> Optional[dict[str, Any]]:
-        h = self.by_key.get(key)
-        if not h or not h.tmux_users:
-            return None
-        result = self.list_host(h)
-        self._store.update(key, result)
-        return result
-
-    def force_sweep(self) -> None:
-        tmux_hosts = [h for h in self.hosts if h.tmux_users]
-        workers = max(1, len(tmux_hosts))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            self._sweep_once(ex)
-
-    def _sweep_once(self, executor: ThreadPoolExecutor) -> None:
-        tmux_hosts = [h for h in self.hosts if h.tmux_users]
-        futures = {executor.submit(self.list_host, h): h for h in tmux_hosts}
-        for fut in as_completed(futures):
-            h = futures[fut]
-            try:
-                self._store.update(h.key, fut.result())
-            except Exception as exc:  # noqa: BLE001
-                log.exception("muxboard sweep failed for %s", h.key)
-                self._store.update(h.key, self._list_fail(h, f"{exc.__class__.__name__}: {exc}", time.monotonic()))
-        self._store.mark_swept()
-
-    def _loop(self) -> None:
-        tmux_hosts = [h for h in self.hosts if h.tmux_users]
-        workers = max(1, len(tmux_hosts))
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            while True:
-                try:
-                    self._sweep_once(ex)
-                except Exception:  # noqa: BLE001
-                    pass
-                time.sleep(self.interval)
-
-    def start_background_loop(self) -> None:
-        with self._thread_lock:
-            if self._thread_started:
-                return
-            t = threading.Thread(target=self._loop, name="muxboard-sweep", daemon=True)
-            t.start()
-            self._thread_started = True
-
 
 def _current_username() -> str:
     import getpass
@@ -599,35 +541,3 @@ def _current_username() -> str:
     except Exception:  # noqa: BLE001
         return os.environ.get("USER", "root")
 
-
-class _TmuxStore:
-    """Thread-safe latest-result cache for the background sweep."""
-
-    def __init__(self, hosts: list[Host]) -> None:
-        self._hosts = hosts
-        self._lock = threading.Lock()
-        self._results: dict[str, dict[str, Any]] = {}
-        self._last_sweep: Optional[float] = None
-
-    def update(self, key: str, result: dict[str, Any]) -> None:
-        with self._lock:
-            self._results[key] = {**result, "checked_at": time.time()}
-
-    def mark_swept(self) -> None:
-        with self._lock:
-            self._last_sweep = time.time()
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            hosts = []
-            for h in self._hosts:
-                if not h.tmux_users:
-                    continue
-                hosts.append({
-                    "key": h.key,
-                    "hostname": h.hostname,
-                    "label": h.display,
-                    "users": list(h.tmux_users),
-                    "result": self._results.get(h.key),
-                })
-            return {"hosts": hosts, "last_sweep": self._last_sweep}

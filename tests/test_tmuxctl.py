@@ -114,14 +114,6 @@ def test_kill_unknown_user_raises():
         c.kill_session(h, "stranger", "s")
 
 
-def test_snapshot_shape():
-    h = Host(key="local", hostname="localhost", tmux_users=("me",), local=True)
-    snap = _ctrl(h).snapshot()
-    assert snap["hosts"][0]["key"] == "local"
-    assert snap["hosts"][0]["users"] == ["me"]
-    assert snap["last_sweep"] is None
-
-
 # ---------- custom tmux sockets (-S) ----------
 
 

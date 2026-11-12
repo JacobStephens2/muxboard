@@ -16,7 +16,7 @@ This is the path that worked in production for a solo-operator ops box:
 | `python3 -m venv .venv` then `pip install "muxboard[deploy] @ git+..."` | PEP 668; gevent comes with the deploy extra |
 | `authorize=signed_cookie_auth(...)` or a custom authorizer | Browser fetch + WebSocket need a cookie, not `?token=` |
 | `url_prefix="/console"` matching the public path | Links and `/ws/...` stay under the mount |
-| `allowed_origins=["https://ops.example.com"]` | Blocks cross-site WebSocket hijacks |
+| `allowed_origins=["https://ops.example.com"]` | Blocks a browser Origin not on the list, on Attach and on create, Kill, and Refresh |
 | Apache/nginx WebSocket upgrade to the backend | Attach is a long-lived WS |
 | `gunicorn -k gevent -w 1` | flask-sock needs a non-sync worker; one worker is enough |
 | systemd `PrivateTmp=false` when `local=True` | Otherwise `/tmp/tmux-*` sockets are invisible |

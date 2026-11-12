@@ -7,11 +7,13 @@ from muxboard.sweep import Sweep
 
 
 def _app(authorize, **kwargs):
+    # Pop so a caller can pass allowed_origins=None and leave the check unset.
+    allowed_origins = kwargs.pop("allowed_origins", ["http://localhost"])
     board = Muxboard(
         hosts=[Host(key="local", hostname="localhost",
                     tmux_users=("alice", "bob"), local=True)],
         authorize=authorize,
-        allowed_origins=["http://localhost"],
+        allowed_origins=allowed_origins,
         **kwargs,
     )
     app = Flask(__name__)
@@ -102,6 +104,26 @@ def test_create_scope_can_be_narrower_than_use_scope():
     assert r.status_code == 403
 
 
+def test_create_refuses_an_origin_not_on_the_list():
+    app, board = _app(lambda r: Principal(name="admin"))
+    created = []
+
+    def fake_create(host, user, name, command=None):
+        created.append((host.key, user, name, command))
+
+    board.controller.create_session = fake_create
+    listed = _fake_sweep(board)
+
+    r = app.test_client().post(
+        "/mux/api/local/alice/create",
+        data={"name": "new1"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    assert created == []
+    assert listed == []
+
+
 def test_create_returns_created_name():
     app, board = _app(lambda r: Principal(
         name="u",
@@ -137,6 +159,83 @@ def test_create_emits_the_create_audit_event():
     assert audited == [("muxboard.create", {"host": "local", "target_user": "alice",
                                             "session_name": "new1", "command": "htop",
                                             "by": "u"})]
+
+
+def test_refresh_refuses_an_origin_not_on_the_list():
+    app, board = _app(lambda r: Principal(name="admin"))
+    listed = _fake_sweep(board)
+
+    r = app.test_client().post(
+        "/mux/api/refresh",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    assert listed == []
+    assert board.sweep.view(Principal(name="admin"))["last_sweep"] is None
+
+
+def test_listed_origin_is_allowed_on_create_kill_and_refresh():
+    app, board = _app(lambda r: Principal(name="admin"))
+    done = []
+    board.controller.create_session = (
+        lambda host, user, name, command=None: done.append(("create", name))
+    )
+    board.controller.kill_session = (
+        lambda host, user, name: done.append(("kill", name))
+    )
+    listed = _fake_sweep(board)
+    client = app.test_client()
+    # Browsers send the page's origin; a trailing slash is the same origin.
+    origin = {"Origin": "http://localhost/"}
+
+    created = client.post("/mux/api/local/alice/create", data={"name": "new1"}, headers=origin)
+    killed = client.post(
+        "/mux/api/local/alice/kill",
+        data={"name": "work", "confirm": "work"},
+        headers=origin,
+    )
+    refreshed = client.post("/mux/api/refresh", headers=origin)
+
+    assert created.status_code == 200
+    assert killed.status_code == 200
+    assert refreshed.status_code == 200
+    assert done == [("create", "new1"), ("kill", "work")]
+    assert listed == ["local", "local", "local"]
+
+
+def test_missing_origin_stays_allowed_on_create_kill_and_refresh():
+    app, board = _app(lambda r: Principal(name="admin"))
+    board.controller.create_session = lambda host, user, name, command=None: None
+    board.controller.kill_session = lambda host, user, name: None
+    listed = _fake_sweep(board)
+    client = app.test_client()
+
+    assert client.post("/mux/api/local/alice/create", data={"name": "new1"}).status_code == 200
+    assert client.post(
+        "/mux/api/local/alice/kill", data={"name": "work", "confirm": "work"}
+    ).status_code == 200
+    assert client.post("/mux/api/refresh").status_code == 200
+    assert listed == ["local", "local", "local"]
+
+
+def test_unset_allowed_origins_does_not_reject_a_foreign_origin():
+    app, board = _app(lambda r: Principal(name="admin"), allowed_origins=None)
+    board.controller.create_session = lambda host, user, name, command=None: None
+    board.controller.kill_session = lambda host, user, name: None
+    listed = _fake_sweep(board)
+    client = app.test_client()
+    foreign = {"Origin": "https://evil.example"}
+
+    assert client.post(
+        "/mux/api/local/alice/create", data={"name": "new1"}, headers=foreign
+    ).status_code == 200
+    assert client.post(
+        "/mux/api/local/alice/kill",
+        data={"name": "work", "confirm": "work"},
+        headers=foreign,
+    ).status_code == 200
+    assert client.post("/mux/api/refresh", headers=foreign).status_code == 200
+    assert listed == ["local", "local", "local"]
 
 
 def test_refresh_without_key_sweeps_every_host():
@@ -194,6 +293,26 @@ def test_kill_requires_confirm_echo():
     r = client.post("/mux/api/local/alice/kill", data={"name": "sess", "confirm": "wrong"})
     assert r.status_code == 400
     assert r.get_json()["ok"] is False
+
+
+def test_kill_refuses_an_origin_not_on_the_list():
+    app, board = _app(lambda r: Principal(name="admin"))
+    killed = []
+
+    def fake_kill(host, user, name):
+        killed.append((host.key, user, name))
+
+    board.controller.kill_session = fake_kill
+    listed = _fake_sweep(board)
+
+    r = app.test_client().post(
+        "/mux/api/local/alice/kill",
+        data={"name": "work", "confirm": "work"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    assert killed == []
+    assert listed == []
 
 
 def test_kill_success_returns_ok():

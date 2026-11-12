@@ -101,10 +101,11 @@ class Muxboard:
                 :func:`~muxboard.auth.deny_all` so an unconfigured board is
                 inert rather than open.
             ssh_key: Board-level default private key for key-based hosts.
-            allowed_origins: Exact origins permitted on the WebSocket handshake
-                (e.g. ``["https://ops.example.com"]``). ``None`` disables the
-                Origin check and logs a warning - set this in production to
-                block cross-site WebSocket hijacking.
+            allowed_origins: Exact origins permitted on Attach's WebSocket
+                handshake and on create, Kill, and Refresh (e.g.
+                ``["https://ops.example.com"]``). ``None`` disables the Origin
+                check and logs a warning - set this in production. A request
+                with no Origin is still allowed.
             audit: Optional ``(event, **fields)`` callback for kill/create/
                 attach events. Defaults to a no-op.
             home_url: Optional absolute or root-relative URL for a "back to
@@ -156,8 +157,9 @@ class Muxboard:
         self._url_prefix = "/muxboard"
         if self.allowed_origins is None:
             log.warning(
-                "muxboard: allowed_origins is unset - the WebSocket Origin "
-                "check is disabled. Set allowed_origins in production."
+                "muxboard: allowed_origins is unset - the Origin check on "
+                "Attach, create, Kill, and Refresh is disabled. Set "
+                "allowed_origins in production."
             )
 
     # ---------- principal resolution ----------
@@ -198,6 +200,13 @@ class Muxboard:
             return True
         return origin.rstrip("/") in self.allowed_origins
 
+    def _require_origin(self) -> None:
+        """Refuse the request unless it passes the Attach Origin check."""
+        if self._origin_ok(request):
+            return
+        log.warning("muxboard: rejecting Origin %r", request.headers.get("Origin"))
+        abort(403)
+
     # ---------- HTTP routes ----------
 
     def _register_http(self, bp: Blueprint) -> None:
@@ -224,6 +233,7 @@ class Muxboard:
 
         @bp.route("/api/refresh", methods=["POST"])
         def api_refresh():
+            self._require_origin()
             principal = self._principal(request)
             if principal is None:
                 abort(401)
@@ -237,6 +247,7 @@ class Muxboard:
 
         @bp.route("/api/<key>/<user>/kill", methods=["POST"])
         def api_kill(key: str, user: str):
+            self._require_origin()
             principal, host = self._guard_mutation(key, user)
             result = self.mutation_runner.kill(
                 host, user,
@@ -250,6 +261,7 @@ class Muxboard:
 
         @bp.route("/api/<key>/<user>/create", methods=["POST"])
         def api_create(key: str, user: str):
+            self._require_origin()
             principal, host = self._guard_mutation(key, user)
             if not principal.may_create(user):
                 abort(403)
